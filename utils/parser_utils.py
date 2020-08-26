@@ -17,7 +17,7 @@ ENCODER_DEFAULT_LR = {
         'roberta-large': 1e-5,
     },
     'hfdata': {
-        'lstm': 3e-4
+        'lstm': 3e-5
     }
 }
 
@@ -75,7 +75,7 @@ def add_encoder_arguments(parser):
     parser.add_argument('--encoder_layer', default=-1, type=int, help='encoder layer ID to use as features (used only by non-LSTM encoders)')
     parser.add_argument('-elr', '--encoder_lr', default=2e-5, type=float, help='learning rate')
     # used only for LSTM encoder
-    parser.add_argument('--encoder_dim', default=100, type=int, help='number of LSTM hidden units')
+    parser.add_argument('--encoder_dim', default=128, type=int, help='number of LSTM hidden units')
     parser.add_argument('--encoder_layer_num', default=2, type=int, help='number of LSTM layers')
     parser.add_argument('--encoder_bidir', default=True, type=bool_flag, nargs='?', const=True, help='use BiLSTM')
     parser.add_argument('--encoder_dropoute', default=0.1, type=float, help='word dropout')
@@ -89,20 +89,20 @@ def add_encoder_arguments(parser):
 
 
 def add_optimization_arguments(parser):
-    parser.add_argument('--loss', default='BCE', choices=['margin_rank', 'BCE'], help='model type')
+    parser.add_argument('--loss', default='cross_entropy', choices=['margin_rank', 'BCE', 'cross_entropy'], help='model type')
     parser.add_argument('--optim', default='radam', choices=['sgd', 'adam', 'adamw', 'radam'], help='learning rate scheduler')
     parser.add_argument('--lr_schedule', default='fixed', choices=['fixed', 'warmup_linear', 'warmup_constant'], help='learning rate scheduler')
-    parser.add_argument('-bs', '--batch_size', default=64, type=int)
+    parser.add_argument('-bs', '--batch_size', default=32, type=int)
     parser.add_argument('--warmup_steps', type=float, default=150)
     parser.add_argument('--max_grad_norm', default=1.0, type=float, help='max grad norm (0 to disable)')
     parser.add_argument('--weight_decay', default=1e-2, type=float, help='l2 weight decay strength')
-    parser.add_argument('--n_epochs', default=100, type=int, help='total number of training epochs to perform.')
-    parser.add_argument('-me', '--max_epochs_before_stop', default=2, type=int, help='stop training if dev does not increase for N epochs')
+    parser.add_argument('--n_epochs', default=200, type=int, help='total number of training epochs to perform.')
+    parser.add_argument('-me', '--max_epochs_before_stop', default=30, type=int, help='stop training if dev does not increase for N epochs')
 
 
 def add_additional_arguments(parser):
     parser.add_argument('--log_interval', default=20, type=int)
-    parser.add_argument('--cuda', default=False, type=bool_flag, nargs='?', const=False, help='use GPU')
+    parser.add_argument('--cuda', default=True, type=bool_flag, nargs='?', const=True, help='use GPU')
     parser.add_argument('--seed', default=0, type=int, help='random seed')
     parser.add_argument('--debug', default=False, type=bool_flag, nargs='?', const=True, help='run in debug mode')
     args, _ = parser.parse_known_args()

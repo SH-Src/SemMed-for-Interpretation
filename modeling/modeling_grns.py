@@ -258,7 +258,7 @@ class MultiHopMessagePassingLayer(nn.Module):
         Z_all = []
         Z = X * start_attn.unsqueeze(2)  # (bs, n_node, h_size)
         for t in range(k):
-            uni_attnt = uni_attn[:, t, :].view(bs * n_head)
+            uni_attnt = uni_attn[:, t, :].contiguous().view(bs * n_head)
 
             if t == 0:  # Z.size() == (bs, n_node, h_size)
                 Z = Z.unsqueeze(-1).expand(bs, n_node, h_size, n_head)
@@ -284,7 +284,7 @@ class MultiHopMessagePassingLayer(nn.Module):
         D_all = []
         D = start_attn
         for t in range(k):
-            uni_attnt = uni_attn[:, t, :].view(bs * n_head)
+            uni_attnt = uni_attn[:, t, :].contiguous().view(bs * n_head)
 
             if t == 0:  # D.size() == (bs, n_node)
                 D = D.unsqueeze(1).expand(bs, n_head, n_node)
@@ -569,7 +569,7 @@ class GraphRelationNet(nn.Module):
         else:
             self.pooler = MultiheadAttPoolLayer(n_attention_head, sent_dim, concept_dim)
 
-        self.fc = MLP(concept_dim + sent_dim, fc_dim, 1, n_fc_layer, p_fc, layer_norm=True)
+        self.fc = MLP(concept_dim + sent_dim, fc_dim, 2, n_fc_layer, p_fc, layer_norm=True)
 
         self.dropout_e = nn.Dropout(p_emb)
         self.dropout_fc = nn.Dropout(p_fc)
@@ -732,7 +732,7 @@ class LMGraphRelationNet(nn.Module):
         logits, attn = self.decoder(sent_vecs.to(concept_ids.device), concept_ids, node_type_ids, adj_lengths, adj,
                                     emb_data=emb_data, cache_output=cache_output)
         #logits = logits.view(bs, nc)
-        logits = logits.view(bs)
+        logits = logits.view(bs, 2)
         return logits, attn
 
 

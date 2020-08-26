@@ -22,8 +22,8 @@ MODEL_NAME_TO_CLASS = {model_name: model_class for model_class, model_name_list 
 class LSTMTextEncoder(nn.Module):
     pool_layer_classes = {'mean': MeanPoolLayer, 'max': MaxPoolLayer}
 
-    def __init__(self, vocab_size=1, emb_size=300, hidden_size=300, output_size=300, num_layers=2, bidirectional=True,
-                 emb_p=0.0, input_p=0.0, hidden_p=0.0, pretrained_emb_or_path=None, freeze_emb=True,
+    def __init__(self, vocab_size=41052, emb_size=300, hidden_size=300, output_size=300, num_layers=2, bidirectional=True,
+                 emb_p=0.0, input_p=0.0, hidden_p=0.0, pretrained_emb_or_path='', freeze_emb=True,
                  pool_function='max', output_hidden_states=False):
         super().__init__()
         self.output_size = output_size
@@ -31,7 +31,7 @@ class LSTMTextEncoder(nn.Module):
         self.output_hidden_states = output_hidden_states
         assert not bidirectional or hidden_size % 2 == 0
 
-        if pretrained_emb_or_path is not None:
+        if pretrained_emb_or_path:
             if isinstance(pretrained_emb_or_path, str):  # load pretrained embedding from a .npy file
                 pretrained_emb_or_path = torch.tensor(np.load(pretrained_emb_or_path), dtype=torch.float)
             emb = nn.Embedding(pretrained_emb_or_path.size(0), pretrained_emb_or_path.size(1), padding_idx=pretrained_emb_or_path.size(0)-1)
@@ -39,6 +39,9 @@ class LSTMTextEncoder(nn.Module):
             emb_size = emb.weight.size(1)
         else:
             emb = nn.Embedding(vocab_size, emb_size, padding_idx=-1)
+
+        if freeze_emb:
+            freeze_net(emb)
         self.emb = EmbeddingDropout(emb, emb_p)
         self.rnns = nn.ModuleList([nn.LSTM(emb_size if l == 0 else hidden_size,
                                            (hidden_size if l != num_layers else output_size) // (2 if bidirectional else 1),
@@ -59,6 +62,7 @@ class LSTMTextEncoder(nn.Module):
         batch_size, seq_len, num_cui_per_visit = inputs.size()
         tmp = self.emb(inputs)
         tmp = torch.sum(tmp, dim=2)
+        #print(tmp.shape)
         hidden_states = self.input_dropout(tmp)
         all_hidden_states = [hidden_states]
         for l, (rnn, hid_dp) in enumerate(zip(self.rnns, self.hidden_dropout)):
@@ -130,7 +134,7 @@ class TextEncoder(nn.Module):
 
 def run_test():
     encoder = TextEncoder('lstm', vocab_size=100, emb_size=100, hidden_size=200, num_layers=4)
-    input_ids = torch.randint(0, 100, (30, 70))
+    input_ids = torch.randint(0, 100, (30, 70, 20))
     lenghts = torch.randint(1, 70, (30,))
     outputs = encoder(input_ids, lenghts)
     assert outputs[0].size() == (30, 200)

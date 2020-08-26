@@ -4,13 +4,14 @@ import itertools
 import json
 from tqdm import tqdm
 # from .semmed import merged_relations
-from .semmed import relations
+from semmed import relations
+from semmed import relations_prune
 import numpy as np
 from scipy import sparse
 import pickle
 from scipy.sparse import csr_matrix, coo_matrix
 from multiprocessing import Pool
-from .maths import *
+from maths import *
 
 cui2id = None
 id2cui = None
@@ -21,17 +22,19 @@ semmed = None
 semmed_all = None
 semmed_simple = None
 
+#relations_prune_ids = None
 
 def load_resources(semmed_cui_path):
     global cui2id, id2cui, relation2id, id2relation
 
     with open(semmed_cui_path, "r", encoding="utf8") as fin:
-        id2cui = [c.strip().split("	")[0] for c in fin]
+        id2cui = [c.strip() for c in fin]
         print(id2cui[0:10])
     cui2id = {c: i for i, c in enumerate(id2cui)}
 
-    id2relation = relations
+    id2relation = relations_prune
     relation2id = {r: i for i, r in enumerate(id2relation)}
+    #relations_prune_ids = [relation2id[c] for c in relations_prune]
 
 
 def load_semmed(semmed_graph_path):
@@ -45,21 +48,26 @@ def load_semmed(semmed_graph_path):
         else:
             semmed_simple.add_edge(u, v, weight=w)
 
-def concepts_to_adj_matrices_2hop_all_pair(data):
-    qc_ids, ac_ids = data
-    qa_nodes = set(qc_ids) | set(ac_ids)
-    extra_nodes = set()
-    for qid in qa_nodes:
-        for aid in qa_nodes:
-            if qid != aid and qid in semmed_simple.nodes and aid in semmed_simple.nodes:
-                extra_nodes |= set(semmed_simple[qid]) & set(semmed_simple[aid])
-    extra_nodes = extra_nodes - qa_nodes
-    schema_graph = sorted(qc_ids) + sorted(ac_ids) + sorted(extra_nodes)
-    arange = np.arange(len(schema_graph))
-    qmask = arange < len(qc_ids)
-    amask = (arange >= len(qc_ids)) & (arange < (len(qc_ids) + len(ac_ids)))
-    adj, concepts = concepts2adj(schema_graph)
-    return adj, concepts, qmask, amask
+# def concepts_to_adj_matrices_2hop_all_pair(data):
+#     qc_ids, ac_ids = data
+#     qa_nodes = set(qc_ids) | set(ac_ids)
+#     extra_nodes = set()
+#     for qid in qa_nodes:
+#         for aid in qa_nodes:
+#             if qid != aid and qid in semmed_simple.nodes and aid in semmed_simple.nodes:
+#                 extra = set(semmed_simple[qid]) & set(semmed_simple[aid]) - qa_nodes
+#                 for node in extra:
+#                     if semmed.has_edge(qid, node):
+#                         rels = [ettr['rel'] for ettr in semmed[qid][node].values()]
+#                         if set(rels) & set(relations_prune_ids):
+#                             extra_nodes.add(node)
+#     extra_nodes = extra_nodes - qa_nodes
+#     schema_graph = sorted(qc_ids) + sorted(ac_ids) + sorted(extra_nodes)
+#     arange = np.arange(len(schema_graph))
+#     qmask = arange < len(qc_ids)
+#     amask = (arange >= len(qc_ids)) & (arange < (len(qc_ids) + len(ac_ids)))
+#     adj, concepts = concepts2adj(schema_graph)
+#     return adj, concepts, qmask, amask
 
 def concepts2adj(node_ids):
     global id2relation
@@ -100,8 +108,97 @@ def concepts_to_adj_matrices_3hop_all_pair(data):
     adj, concepts = concepts2adj(schema_graph)
     return adj, concepts, qmask, amask
 
+def save_nodes_of_2hop_all_pair(data):
+    record_idxs, hf_idxs = data
+    nodes = set(record_idxs) | set(hf_idxs)
+    extra_nodes = set()
 
-def generate_adj_data_from_grounded_concepts(grounded_path, semmed_graph_path, semmed_vocab_path, output_path, numprocesses):
+    for record_idx in nodes:
+        for hf_idx in nodes:
+            if record_idx != hf_idx and record_idx in semmed_simple.nodes and hf_idx in semmed_simple.nodes:
+                extra_nodes |= set(semmed_simple[record_idx]) & set(semmed_simple[hf_idx])
+    extra_nodes = extra_nodes - nodes
+    all_nodes = record_idxs | hf_idxs | extra_nodes
+    return all_nodes
+
+
+def save_nodes_of_3hop_all_pair(data):
+    record_idxs, hf_idxs = data
+    nodes = set(record_idxs) | set(hf_idxs)
+    extra_nodes = set()
+
+    for record_idx in nodes:
+        for hf_idx in nodes:
+            if record_idx != hf_idx and record_idx in semmed_simple.nodes and hf_idx in semmed_simple.nodes:
+                for u in semmed_simple[record_idx]:
+                    for v in semmed_simple[hf_idx]:
+                        if semmed_simple.has_edge(u, v):  # hf_cui is a 3-hop neighbour of record_cui
+                            extra_nodes.add(u)
+                            extra_nodes.add(v)
+                        if u == v:  # hf_cui is a 2-hop neighbour of record_cui
+                            extra_nodes.add(u)
+    extra_nodes = extra_nodes - nodes
+    all_nodes = record_idxs | hf_idxs | extra_nodes
+    return all_nodes
+
+def extract_subgraph_cui(grounded_train_path, grounded_dev_path, grounded_test_path, semmed_graph_path, semmed_cui_path, output_path):
+    """
+    extracting all cui in the 2hop and 3hop paths of the hfdata as the subgraph cui list
+    """
+    print("extracting subgraph cui from grounded_path...")
+
+    global cui2id, id2cui, relation2id, id2relation, semmed, semmed_simple
+    if any(x is None for x in [cui2id, id2cui, relation2id, id2relation]):
+        load_resources(semmed_cui_path)
+    if any(x is None for x in [semmed, semmed_simple]):
+        load_semmed(semmed_graph_path)
+
+    data = []
+    semmed_cui = set()
+
+    with open(grounded_train_path, "r", encoding="utf-8") as fin:
+        for line in fin:
+            dic = json.loads(line)
+            record_idxs = set(cui2id[c] for c in dic["medical_records"]["record_cui_list"])
+            hf_idxs = set(cui2id[c] for c in dic["heart_diseases"]["hf_cui"])
+            record_idxs = record_idxs - hf_idxs
+            if (record_idxs, hf_idxs) not in data:
+                data.append((record_idxs, hf_idxs))
+    with open(grounded_dev_path, "r", encoding="utf-8") as fin:
+        for line in fin:
+            dic = json.loads(line)
+            record_idxs = set(cui2id[c] for c in dic["medical_records"]["record_cui_list"])
+            hf_idxs = set(cui2id[c] for c in dic["heart_diseases"]["hf_cui"])
+            record_idxs = record_idxs - hf_idxs
+            if (record_idxs, hf_idxs) not in data:
+                data.append((record_idxs, hf_idxs))
+    with open(grounded_test_path, "r", encoding="utf-8") as fin:
+        for line in fin:
+            dic = json.loads(line)
+            record_idxs = set(cui2id[c] for c in dic["medical_records"]["record_cui_list"])
+            hf_idxs = set(cui2id[c] for c in dic["heart_diseases"]["hf_cui"])
+            record_idxs = record_idxs - hf_idxs
+            if (record_idxs, hf_idxs) not in data:
+                data.append((record_idxs, hf_idxs))
+
+    # with Pool(num_processes) as p:
+    #     res = list(tqdm(p.imap(save_nodes_of_3hop_all_pair, data), total=len(data)))
+    res = []
+    for i in tqdm(range(len(data))):
+        res.append(save_nodes_of_2hop_all_pair(data[i]))
+
+    for cuis in res:
+        semmed_cui |= set(cuis)
+    semmed_cui_list = list(semmed_cui)
+
+    with open(output_path, "w", encoding="utf-8") as fout:
+        for cui in semmed_cui_list:
+            fout.write(str(id2cui[cui]) + "\n")
+
+    print(f'extracted subgraph cui saved to {output_path}')
+    print()
+
+def generate_adj_data_from_grounded_concepts(grounded_path, semmed_graph_path, semmed_vocab_path, output_path):
     """
     This function will save
         (1) adjacency matrics (each in the form of a (R*N, N) coo sparse matrix)
@@ -133,11 +230,11 @@ def generate_adj_data_from_grounded_concepts(grounded_path, semmed_graph_path, s
             q_ids = q_ids - a_ids
             qa_data.append((q_ids, a_ids))
 
-    with Pool(numprocesses) as p:
-        res = list(tqdm(p.imap(concepts_to_adj_matrices_2hop_all_pair, qa_data), total=len(qa_data)))
-    # res = []
-    # for i in tqdm(range(0, len(qa_data))):
-    #     res.append(concepts_to_adj_matrices_3hop_all_pair(qa_data[i]))
+    # with Pool(numprocesses) as p:
+    #     res = list(tqdm(p.imap(concepts_to_adj_matrices_2hop_all_pair, qa_data), total=len(qa_data)))
+    res = []
+    for i in tqdm(range(len(qa_data))):
+        res.append(concepts_to_adj_matrices_2hop_all_pair(qa_data[i]))
     # res is a list of tuples, each tuple consists of four elements (adj, concepts, qmask, amask)
     with open(output_path, 'wb') as fout:
         pickle.dump(res, fout)
@@ -149,11 +246,14 @@ def generate_adj_data_from_grounded_concepts(grounded_path, semmed_graph_path, s
 if __name__ == "__main__":
     #generate_graph("../data/hfdata/grounded/dev_ground.jsonl", "../data/hfdata/paths/dev_paths.jsonl",
     #               "../data/semmed/cui_vocab.txt", "../data/semmed/database_pruned.graph", "../data/hfdata/graph/dev_graph.jsonl")
-    generate_adj_data_from_grounded_concepts("../data/hfdata/grounded/dev_ground.jsonl", "../data/semmed/database.graph",
-                                             "../data/semmed/entity2id.txt", "../data/hfdata/graph/dev_graph_adj.pk")
-    generate_adj_data_from_grounded_concepts("../data/hfdata/grounded/train_ground.jsonl",
-                                             "../data/semmed/database.graph",
-                                             "../data/semmed/entity2id.txt", "../data/hfdata/graph/train_graph_adj.pk")
-    generate_adj_data_from_grounded_concepts("../data/hfdata/grounded/test_ground.jsonl",
-                                             "../data/semmed/database.graph",
-                                             "../data/semmed/entity2id.txt", "../data/hfdata/graph/test_graph_adj.pk")
+    # generate_adj_data_from_grounded_concepts("../data/hfdata/grounded/dev_ground.jsonl", "../data/semmed/database.graph",
+    #                                          "../data/semmed/entity2id.txt", "../data/hfdata/graph/dev_graph_adj.pk")
+    # generate_adj_data_from_grounded_concepts("../data/hfdata/grounded/train_ground.jsonl",
+    #                                          "../data/semmed/database.graph",
+    #                                          "../data/semmed/entity2id.txt", "../data/hfdata/graph/train_graph_adj.pk")
+    # generate_adj_data_from_grounded_concepts("../data/hfdata/grounded/test_ground.jsonl",
+    #                                          "../data/semmed/database.graph",
+    #                                          "../data/semmed/entity2id.txt", "../data/hfdata/graph/test_graph_adj.pk")
+    extract_subgraph_cui("../data/hfdata/grounded/train_ground.jsonl", "../data/hfdata/grounded/dev_ground.jsonl",
+                         "../data/hfdata/grounded/test_ground.jsonl", "../data/semmed/database_all.graph",
+                         "../data/semmed/cui_vocab.txt", "../data/semmed/sub_cui_vocab.txt")

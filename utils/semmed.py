@@ -7,7 +7,7 @@ from tqdm import tqdm
 # except ImportError:
 #     from utils import check_file
 
-__all__ = ["construct_graph", "relations"]
+__all__ = ["construct_graph", "relations", "relations_prune"]
 
 
 # (33 pos, 31 neg): no neg_compared_with, neg_prep
@@ -16,6 +16,7 @@ relations = ['administered_to', 'affects', 'associated_with', 'augments', 'cause
              'manifestation_of', 'measurement_of', 'measures', 'method_of', 'occurs_in', 'part_of', 'precedes', 'predisposes', 'prep',
              'prevents', 'process_of', 'produces', 'same_as', 'stimulates', 'treats', 'uses']
 
+relations_prune = ['affects', 'augments', 'causes', 'diagnoses', 'interacts_with', 'part_of', 'precedes', 'predisposes', 'produces']
 
 def load_merge_relation():
     # TODO: merge relation
@@ -43,81 +44,54 @@ def separate_semmed_cui(semmed_cui: str) -> list:
             sep_cui_list.append(sep_cui)
     return sep_cui_list
 
-def extract_semmed_cui(semmed_csv_path, output_csv_path, semmed_cui_path):
-    # TODO: deal with some error cui and its influence on graph constructing
+def extract_semmed_cui(semmed_csv_path, semmed_cui_path):
     """
     read the original SemMed csv file to extract all cui and store
     """
     print('extracting cui list from SemMed...')
-    semmed_cui_vocab = []
-    cui_seen = set()
+
+    semmed_cui_list = []
     nrow = sum(1 for _ in open(semmed_csv_path, "r", encoding="utf-8"))
-    with open(semmed_csv_path, "r", encoding="utf-8") as fin, open(output_csv_path, "w", encoding="utf-8") as fout:
+
+    with open(semmed_csv_path, "r", encoding="utf-8") as fin:
         for line in tqdm(fin, total=nrow):
             ls = line.strip().split(',')
-            if ls == ['']:
-                continue
-            subj = ls[4]
-            obj = ls[8]
-            if len(subj) == 8 and len(obj) == 8 and subj.startswith("C") and obj.startswith("C"):
-                fout.write(line+"\n")
-                for i in [subj, obj]:
-                    if i not in cui_seen:
-                        semmed_cui_vocab.append(i)
-                        cui_seen.add(i)
+
+            if ls[4].startswith("C"):
+                subj = ls[4]
+                if len(subj) != 8:
+                    subj_list = separate_semmed_cui(subj)
+                    semmed_cui_list.extend(subj_list)
+                else:
+                    semmed_cui_list.append(subj)
+            if ls[8].startswith("C"):
+                obj = ls[8]
+                if len(obj) != 8:
+                    obj_list = separate_semmed_cui(obj)
+                    semmed_cui_list.extend(obj_list)
+                else:
+                    semmed_cui_list.append(obj)
+
+        semmed_cui_list = list(set(semmed_cui_list))
 
     with open(semmed_cui_path, "w", encoding="utf-8") as fout:
-        for semmed_cui in semmed_cui_vocab:
+        for semmed_cui in semmed_cui_list:
+            assert len(semmed_cui) == 8
+            assert semmed_cui.startswith("C")
             fout.write(semmed_cui + "\n")
 
     print(f'extracted cui saved to {semmed_cui_path}')
     print()
 
-def construct_graph(semmed_csv_path, semmed_cui_path, output_path, prune=True):
-    # TODO: 1. prune 2. deal with the case that subj == obj 3. cui with | 4. cui2idx?
-    """
-    construct the SemMed graph file
-    """
+
+def construct_graph(semmed_csv_path, semmed_cui_path, output_path):
     print("generating SemMed graph file...")
+
     with open(semmed_cui_path, "r", encoding="utf-8") as fin:
         idx2cui = [c.strip() for c in fin]
     cui2idx = {c: i for i, c in enumerate(idx2cui)}
 
-    idx2relation = relations
-    relation2idx = {r: i for i, r in enumerate(idx2relation)}
-
-    graph = nx.MultiDiGraph()
-    nrow = sum(1 for _ in open(semmed_csv_path, "r", encoding="utf-8"))
-    with open(semmed_csv_path, "r", encoding="utf-8") as fin:
-        attrs = set()
-        for line in tqdm(fin, total=nrow):
-            ls = line.strip().split(',')
-            if ls == ['']:
-                continue
-            rel = relation2idx[ls[3].lower()]
-            subj = cui2idx[ls[4]]
-            obj = cui2idx[ls[8]]
-            if subj == obj:
-                continue
-            if (subj, obj, rel) not in attrs:
-                graph.add_edge(subj, obj, rel=rel)
-                attrs.add((subj, obj, rel))
-                graph.add_edge(obj, subj, rel=rel+len(relation2idx))
-                attrs.add((obj, subj, rel+len(relation2idx)))
-    nx.write_gpickle(graph, output_path)
-
-    print(f"graph file saved to {output_path}")
-    print()
-
-def construct_subgraph(semmed_csv_path, semmed_cui_path, output_graph_path):
-    print("generating subgraph of SemMed using newly extracted cui list...")
-
-    with open(semmed_cui_path, "r", encoding="utf-8") as fin:
-        idx2cui = [c.strip().split('	')[0].strip() for c in fin]
-        print(idx2cui)
-    cui2idx = {c: i for i, c in enumerate(idx2cui)}
-
-    idx2relation = relations
+    idx2relation = relations_prune
     relation2idx = {r: i for i, r in enumerate(idx2relation)}
 
     graph = nx.MultiDiGraph()
@@ -127,13 +101,10 @@ def construct_subgraph(semmed_csv_path, semmed_cui_path, output_graph_path):
         attrs = set()
         for line in tqdm(fin, total=nrow):
             ls = line.strip().split(',')
-            if ls[3].lower() not in relations:
-                continue
-            if ls[4] not in idx2cui or ls[8] not in idx2cui:
+            if ls[3].lower() not in idx2relation:
                 continue
             if ls[4] == ls[8]: # delete self-loop, not useful for our task
                 continue
-
             sent = ls[1]
             rel = relation2idx[ls[3].lower()]
 
@@ -144,8 +115,6 @@ def construct_subgraph(semmed_csv_path, semmed_cui_path, output_graph_path):
                     if (subj, obj, rel) not in attrs:
                         graph.add_edge(subj, obj, rel=rel, sent=sent)
                         attrs.add((subj, obj, rel))
-                        graph.add_edge(obj, subj, rel=rel+len(relation2idx), sent=sent)
-                        attrs.add((obj, subj, rel+len(relation2idx)))
                 elif len(ls[4]) != 8 and len(ls[8]) == 8:
                     cui_list = separate_semmed_cui(ls[4])
                     subj_list = [cui2idx[s] for s in cui_list]
@@ -154,8 +123,6 @@ def construct_subgraph(semmed_csv_path, semmed_cui_path, output_graph_path):
                         if (subj, obj, rel) not in attrs:
                             graph.add_edge(subj, obj, rel=rel, sent=sent)
                             attrs.add((subj, obj, rel))
-                            graph.add_edge(obj, subj, rel=rel + len(relation2idx), sent=sent)
-                            attrs.add((obj, subj, rel + len(relation2idx)))
                 elif len(ls[4]) == 8 and len(ls[8]) != 8:
                     cui_list = separate_semmed_cui(ls[8])
                     obj_list = [cui2idx[o] for o in cui_list]
@@ -164,8 +131,6 @@ def construct_subgraph(semmed_csv_path, semmed_cui_path, output_graph_path):
                         if (subj, obj, rel) not in attrs:
                             graph.add_edge(subj, obj, rel=rel, sent=sent)
                             attrs.add((subj, obj, rel))
-                            graph.add_edge(obj, subj, rel=rel + len(relation2idx), sent=sent)
-                            attrs.add((obj, subj, rel + len(relation2idx)))
                 else:
                     cui_list1 = separate_semmed_cui(ls[4])
                     subj_list = [cui2idx[s] for s in cui_list1]
@@ -176,14 +141,98 @@ def construct_subgraph(semmed_csv_path, semmed_cui_path, output_graph_path):
                             if (subj, obj, rel) not in attrs:
                                 graph.add_edge(subj, obj, rel=rel, sent=sent)
                                 attrs.add((subj, obj, rel))
-                                graph.add_edge(obj, subj, rel=rel + len(relation2idx), sent=sent)
-                                attrs.add((obj, subj, rel + len(relation2idx)))
-    nx.write_gpickle(graph, output_graph_path)
-    print(len(attrs))
-    print(f"graph file saved to {output_graph_path}")
+
+    nx.write_gpickle(graph, output_path)
+
+    # with open(output_txt_path, "w", encoding="utf-8") as fout:
+    #     for triple in attrs:
+    #         fout.write(str(triple[0]) + "\t" + str(triple[1]) + "\t" + str(triple[2])+ "\n")
+
+    print(f"graph file saved to {output_path}")
     #print(f"txt file saved to {output_txt_path}")
     print()
 
+
+def construct_subgraph(semmed_csv_path, semmed_cui_path, output_graph_path, output_txt_path):
+    print("generating subgraph of SemMed using newly extracted cui list...")
+
+    with open(semmed_cui_path, "r", encoding="utf-8") as fin:
+        idx2cui = [c.strip() for c in fin]
+        #print(idx2cui)
+    cui2idx = {c: i for i, c in enumerate(idx2cui)}
+
+    idx2relation = relations_prune
+    relation2idx = {r: i for i, r in enumerate(idx2relation)}
+
+    graph = nx.MultiDiGraph()
+    nrow = sum(1 for _ in open(semmed_csv_path, "r", encoding="utf-8"))
+
+    with open(semmed_csv_path, "r", encoding="utf-8") as fin:
+        attrs = set()
+        for line in tqdm(fin, total=nrow):
+            ls = line.strip().split(',')
+            if ls[3].lower() not in idx2relation:
+                continue
+            if ls[4] == ls[8]: # delete self-loop, not useful for our task
+                continue
+
+            sent = ls[1]
+            rel = relation2idx[ls[3].lower()]
+
+            if ls[4].startswith("C") and ls[8].startswith("C"):
+                if len(ls[4]) == 8 and len(ls[8]) == 8:
+                    if ls[4] in idx2cui and ls[8] in idx2cui:
+                        subj = cui2idx[ls[4]]
+                        obj = cui2idx[ls[8]]
+                        if (subj, obj, rel) not in attrs:
+                            graph.add_edge(subj, obj, rel=rel, sent=sent)
+                            attrs.add((subj, obj, rel))
+                            # graph.add_edge(obj, subj, rel=rel+len(relation2idx), sent=sent)
+                            # attrs.add((obj, subj, rel+len(relation2idx)))
+                elif len(ls[4]) != 8 and len(ls[8]) == 8:
+                    cui_list = separate_semmed_cui(ls[4])
+                    subj_list = [cui2idx[s] for s in cui_list if s in idx2cui]
+                    if ls[8] in idx2cui:
+                        obj = cui2idx[ls[8]]
+                        for subj in subj_list:
+                            if (subj, obj, rel) not in attrs:
+                                graph.add_edge(subj, obj, rel=rel, sent=sent)
+                                attrs.add((subj, obj, rel))
+                                # graph.add_edge(obj, subj, rel=rel + len(relation2idx), sent=sent)
+                                # attrs.add((obj, subj, rel + len(relation2idx)))
+                elif len(ls[4]) == 8 and len(ls[8]) != 8:
+                    cui_list = separate_semmed_cui(ls[8])
+                    obj_list = [cui2idx[o] for o in cui_list if o in idx2cui]
+                    if ls[4] in idx2cui:
+                        subj = cui2idx[ls[4]]
+                        for obj in obj_list:
+                            if (subj, obj, rel) not in attrs:
+                                graph.add_edge(subj, obj, rel=rel, sent=sent)
+                                attrs.add((subj, obj, rel))
+                                # graph.add_edge(obj, subj, rel=rel + len(relation2idx), sent=sent)
+                                # attrs.add((obj, subj, rel + len(relation2idx)))
+                else:
+                    cui_list1 = separate_semmed_cui(ls[4])
+                    subj_list = [cui2idx[s] for s in cui_list1 if s in idx2cui]
+                    cui_list2 = separate_semmed_cui(ls[8])
+                    obj_list = [cui2idx[o] for o in cui_list2 if o in idx2cui]
+                    for subj in subj_list:
+                        for obj in obj_list:
+                            if (subj, obj, rel) not in attrs:
+                                graph.add_edge(subj, obj, rel=rel, sent=sent)
+                                attrs.add((subj, obj, rel))
+                                # graph.add_edge(obj, subj, rel=rel + len(relation2idx), sent=sent)
+                                # attrs.add((obj, subj, rel + len(relation2idx)))
+    nx.write_gpickle(graph, output_graph_path)
+    with open(output_txt_path, "w", encoding="utf-8") as fout:
+        for triple in attrs:
+            fout.write(str(triple[0]) + "\t" + str(triple[1]) + "\t" + str(triple[2])+ "\n")
+    print(len(attrs))
+    print(f"graph file saved to {output_graph_path}")
+    print(f"txt file saved to {output_txt_path}")
+    print()
+
 if __name__ == "__main__":
-    #extract_semmed_cui("../data/semmed/database.csv", "../data/semmed/database_pruned.csv", "../data/semmed/cui_vocab.txt")
-    construct_subgraph("../data/semmed/database.csv", "../data/semmed/entity2id.txt", "../data/semmed/database.graph")
+    #extract_semmed_cui("../data/semmed/database.csv", "../data/semmed/cui_vocab.txt")
+    #construct_graph("../data/semmed/database.csv", "../data/semmed/cui_vocab.txt", "../data/semmed/database_all.graph")
+    construct_subgraph("../data/semmed/database.csv", "../data/semmed/sub_cui_vocab.txt", "../data/semmed/database_pruned.graph", "../data/semmed/sub_graph.txt")

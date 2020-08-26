@@ -2,7 +2,7 @@ import random
 
 from tqdm import tqdm
 from transformers import (ConstantLRSchedule, WarmupLinearSchedule, WarmupConstantSchedule)
-
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 from modeling.modeling_grns import *
 from utils.optimization_utils import OPTIMIZER_CLASSES
 from utils.parser_utils import *
@@ -36,6 +36,29 @@ def evaluate_accuracy(eval_set, model):
             n_samples += labels.size(0)
     return n_correct / n_samples
 
+def eval_metric(eval_set, model):
+    model.eval()
+    with torch.no_grad():
+        y_true = np.array([])
+        y_pred = np.array([])
+        for qids, labels, *input_data in eval_set:
+            logits, _ = model(*input_data)
+            logits = logits.data.cpu().numpy()
+            labels = labels.data.cpu().numpy()
+            for i in range(len(logits)):
+                if logits[i] >= 0:
+                    logits[i] = 1
+                else:
+                    logits[i] = 0
+            y_true = np.concatenate((y_true, labels))
+            y_pred = np.concatenate((y_pred, logits))
+        accuary = accuracy_score(y_true, y_pred)
+        precision = precision_score(y_true, y_pred)
+        recall = recall_score(y_true, y_pred)
+        f1 = f1_score(y_true, y_pred)
+        roc_auc = roc_auc_score(y_true, y_pred)
+    return accuary, precision, recall, f1, roc_auc
+
 
 def main():
     parser = get_parser()
@@ -46,9 +69,9 @@ def main():
     # data
     parser.add_argument('--cpnet_vocab_path', default='./data/semmed/entity2id.txt')
     parser.add_argument('--num_relation', default=66, type=int, help='number of relations')
-    parser.add_argument('--train_adj', default=f'./data/{args.dataset}/graph/train_graph_adj.pk')
-    parser.add_argument('--dev_adj', default=f'./data/{args.dataset}/graph/dev_graph_adj.pk')
-    parser.add_argument('--test_adj', default=f'./data/{args.dataset}/graph/test_graph_adj.pk')
+    parser.add_argument('--train_adj', default=f'./data/{args.dataset}/graph/train.graph.adj.pk')
+    parser.add_argument('--dev_adj', default=f'./data/{args.dataset}/graph/dev.graph.adj.pk')
+    parser.add_argument('--test_adj', default=f'./data/{args.dataset}/graph/test.graph.adj.pk')
     # parser.add_argument('--train_embs', default=f'./data/{args.dataset}/features/train.{get_node_feature_encoder(args.encoder)}.features.pk')
     # parser.add_argument('--dev_embs', default=f'./data/{args.dataset}/features/dev.{get_node_feature_encoder(args.encoder)}.features.pk')
     # parser.add_argument('--test_embs', default=f'./data/{args.dataset}/features/test.{get_node_feature_encoder(args.encoder)}.features.pk')
@@ -59,7 +82,7 @@ def main():
 
     # model architecture
     parser.add_argument('-k', '--k', default=2, type=int, help='perform k-hop message passing at each layer')
-    parser.add_argument('--ablation', default=['no_trans'], choices=['no_trans', 'early_relu', 'no_att', 'ctx_trans', 'q2a_only',
+    parser.add_argument('--ablation', default=[], choices=['no_trans', 'early_relu', 'no_att', 'ctx_trans', 'q2a_only',
                                                            'no_typed_transform', 'no_type_att', 'typed_pool', 'no_unary',
                                                            'detach_s_agg', 'detach_s_all', 'detach_s_pool', 'agg_self_loop',
                                                            'early_trans', 'pool_qc', 'pool_ac', 'pool_all',
@@ -74,7 +97,7 @@ def main():
     parser.add_argument('--gnn_layer_num', default=1, type=int, help='number of GNN layers')
     parser.add_argument('--fc_dim', default=200, type=int, help='number of FC hidden units')
     parser.add_argument('--fc_layer_num', default=0, type=int, help='number of FC layers')
-    parser.add_argument('--freeze_ent_emb', default=False, type=bool_flag, nargs='?', const=False, help='freeze entity embedding layer')
+    parser.add_argument('--freeze_ent_emb', default=True, type=bool_flag, nargs='?', const=True, help='freeze entity embedding layer')
     parser.add_argument('--eps', type=float, default=1e-15, help='avoid numeric overflow')
     parser.add_argument('--init_range', default=0.02, type=float, help='stddev when initializing with normal distribution')
     parser.add_argument('--init_rn', default=True, type=bool_flag, nargs='?', const=True)
@@ -224,74 +247,82 @@ def train(args):
     start_time = time.time()
     model.train()
     freeze_net(model.encoder)
-    try:
-        for epoch_id in range(args.n_epochs):
-            if epoch_id == args.unfreeze_epoch:
-                unfreeze_net(model.encoder)
-            if epoch_id == args.refreeze_epoch:
-                freeze_net(model.encoder)
-            model.train()
-            for qids, labels, *input_data in dataset.train():
-                optimizer.zero_grad()
-                bs = labels.size(0)
-                for a in range(0, bs, args.mini_batch_size):
-                    b = min(a + args.mini_batch_size, bs)
-                    logits, _ = model(*[x[a:b] for x in input_data], layer_id=args.encoder_layer)
+    for epoch_id in range(args.n_epochs):
+        if epoch_id == args.unfreeze_epoch:
+            unfreeze_net(model.encoder)
+        if epoch_id == args.refreeze_epoch:
+            freeze_net(model.encoder)
+        model.train()
+        for qids, labels, *input_data in dataset.train():
+            optimizer.zero_grad()
+            bs = labels.size(0)
+            for a in range(0, bs, args.mini_batch_size):
+                b = min(a + args.mini_batch_size, bs)
+                logits, _ = model(*[x[a:b] for x in input_data], layer_id=args.encoder_layer)
 
-                    if args.loss == 'margin_rank':
-                        num_choice = logits.size(1)
-                        flat_logits = logits.view(-1)
-                        correct_mask = F.one_hot(labels, num_classes=num_choice).view(
-                            -1)  # of length batch_size*num_choice
-                        correct_logits = flat_logits[correct_mask == 1].contiguous().view(-1, 1).expand(-1,
-                                                                                                        num_choice - 1).contiguous().view(
-                            -1)  # of length batch_size*(num_choice-1)
-                        wrong_logits = flat_logits[correct_mask == 0]  # of length batch_size*(num_choice-1)
-                        y = wrong_logits.new_ones((wrong_logits.size(0),))
-                        loss = loss_func(correct_logits, wrong_logits, y)  # margin ranking loss
-                    elif args.loss == 'BCE':
-                        # print(labels[a:b])
-                        # print(logits)
-                        loss = loss_func(logits, labels[a:b])
-                    loss = loss * (b - a) / bs
-                    loss.backward()
-                    total_loss += loss.item()
-                if args.max_grad_norm > 0:
-                    nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-                scheduler.step()
-                optimizer.step()
+                if args.loss == 'margin_rank':
+                    num_choice = logits.size(1)
+                    flat_logits = logits.view(-1)
+                    correct_mask = F.one_hot(labels, num_classes=num_choice).view(
+                        -1)  # of length batch_size*num_choice
+                    correct_logits = flat_logits[correct_mask == 1].contiguous().view(-1, 1).expand(-1,
+                                                                                                    num_choice - 1).contiguous().view(
+                        -1)  # of length batch_size*(num_choice-1)
+                    wrong_logits = flat_logits[correct_mask == 0]  # of length batch_size*(num_choice-1)
+                    y = wrong_logits.new_ones((wrong_logits.size(0),))
+                    loss = loss_func(correct_logits, wrong_logits, y)  # margin ranking loss
+                elif args.loss == 'BCE':
+                    # print(labels[a:b])
+                    # print(logits)
+                    loss = loss_func(logits, labels[a:b])
+                loss = loss * (b - a) / bs
+                loss.backward()
+                total_loss += loss.item()
+            if args.max_grad_norm > 0:
+                nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+            scheduler.step()
+            optimizer.step()
 
-                if (global_step + 1) % args.log_interval == 0:
-                    total_loss /= args.log_interval
-                    ms_per_batch = 1000 * (time.time() - start_time) / args.log_interval
-                    print('| step {:5} |  lr: {:9.7f} | loss {:7.4f} | ms/batch {:7.2f} |'.format(global_step,
-                                                                                                  scheduler.get_lr()[0],
-                                                                                                  total_loss,
-                                                                                                  ms_per_batch))
-                    total_loss = 0
-                    start_time = time.time()
-                global_step += 1
+            if (global_step + 1) % args.log_interval == 0:
+                total_loss /= args.log_interval
+                ms_per_batch = 1000 * (time.time() - start_time) / args.log_interval
+                print('| step {:5} |  lr: {:9.7f} | loss {:7.4f} | ms/batch {:7.2f} |'.format(global_step,
+                                                                                              scheduler.get_lr()[0],
+                                                                                              total_loss,
+                                                                                              ms_per_batch))
+                total_loss = 0.0
+                start_time = time.time()
+            global_step += 1
 
-            model.eval()
-            dev_acc = evaluate_accuracy(dataset.dev(), model)
-            test_acc = evaluate_accuracy(dataset.test(), model) if args.test_statements else 0.0
-            print('-' * 71)
-            print('| step {:5} | dev_acc {:7.4f} | test_acc {:7.4f} | loss {:7.4f} '.format(global_step, dev_acc, test_acc, total_loss))
-            print('-' * 71)
-            with open(log_path, 'a') as fout:
-                fout.write('{},{},{}\n'.format(global_step, dev_acc, test_acc))
-            if dev_acc >= best_dev_acc:
-                best_dev_acc = dev_acc
-                final_test_acc = test_acc
-                best_dev_epoch = epoch_id
-                torch.save([model, args], model_path)
-                print(f'model saved to {model_path}')
-            model.train()
-            start_time = time.time()
-            if epoch_id > args.unfreeze_epoch and epoch_id - best_dev_epoch >= args.max_epochs_before_stop:
-                break
-    except (KeyboardInterrupt, RuntimeError) as e:
-        print(e)
+        model.eval()
+        dev_acc = evaluate_accuracy(dataset.dev(), model)
+        test_acc = evaluate_accuracy(dataset.test(), model) if args.test_statements else 0.0
+        if (global_step) % args.log_interval == 0:
+            tl = total_loss
+        else:
+            tl = total_loss / (global_step % args.log_interval)
+        print('-' * 71)
+        print('| step {:5} | dev_acc {:7.4f} | test_acc {:7.4f} | loss {:7.4f} '.format(global_step, dev_acc, test_acc,
+                                                                                        tl))
+        print('-' * 71)
+        with open(log_path, 'a') as fout:
+            fout.write('{},{},{}\n'.format(global_step, dev_acc, test_acc))
+        if dev_acc >= best_dev_acc:
+            best_dev_acc = dev_acc
+            final_test_acc = test_acc
+            best_dev_epoch = epoch_id
+            torch.save([model, args], model_path)
+            print(f'model saved to {model_path}')
+        model.train()
+        start_time = time.time()
+        if epoch_id > args.unfreeze_epoch and epoch_id - best_dev_epoch >= args.max_epochs_before_stop:
+            accuary, precision, recall, f1, roc_auc = eval_metric(dataset.test(), model)
+            print(accuary, precision, recall, f1, roc_auc)
+            break
+    # try:
+    #
+    # except (KeyboardInterrupt, RuntimeError) as e:
+    #     print(e)
 
     print()
     print('training ends in {} steps'.format(global_step))
@@ -323,9 +354,17 @@ def eval(args):
     print(f'| dataset: {old_args.dataset} | num_dev: {dataset.dev_size()} | num_test: {dataset.test_size()} | save_dir: {args.save_dir} |')
     dev_acc = evaluate_accuracy(dataset.dev(), model)
     test_acc = evaluate_accuracy(dataset.test(), model) if dataset.test_size() else 0.0
+    d_accuary, d_precision, d_recall, d_f1, d_roc_auc = eval_metric(dataset.dev(), model)
+    t_accuary, t_precision, t_recall, t_f1, t_roc_auc = eval_metric(dataset.test(), model)
     print("***** evaluation done *****")
     print()
     print(f'| dev_accuracy: {dev_acc} | test_acc: {test_acc} |')
+    print(f'| dev_accuracy: {d_accuary} | test_acc: {t_accuary} |')
+    print(f'| dev_precision: {d_precision} | test_precision: {t_precision} |')
+    print(f'| dev_recall: {d_recall} | test_recall: {t_recall} |')
+    print(f'| dev_f1: {d_f1} | test_f1: {t_f1} |')
+    print(f'| dev_roc_auc: {d_roc_auc} | test_roc_auc: {t_roc_auc} |')
+
 
 
 def pred(args):

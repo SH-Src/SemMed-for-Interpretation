@@ -3,7 +3,7 @@ import random
 from tqdm import tqdm
 from transformers import (ConstantLRSchedule, WarmupLinearSchedule, WarmupConstantSchedule)
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-from modeling.modeling_grn import *
+from modeling.modeling_lstm import *
 from utils.optimization_utils import OPTIMIZER_CLASSES
 from utils.parser_utils import *
 from utils.relpath_utils import *
@@ -19,7 +19,6 @@ DECODER_DEFAULT_LR = {
 def get_node_feature_encoder(encoder_name):
     return encoder_name.replace('-cased', '-uncased')
 
-
 def evaluate_accuracy(eval_set, model):
     #n_samples, n_correct = 0, 0
     model.eval()
@@ -27,7 +26,7 @@ def evaluate_accuracy(eval_set, model):
         y_true = np.array([])
         y_pred = np.array([])
         for qids, labels, *input_data in eval_set:
-            logits, _ = model(*input_data)
+            logits = model(*input_data)
             logits = logits.data.cpu().numpy()
             labels = labels.data.cpu().numpy()
             logits = logits.argmax(1)
@@ -41,7 +40,7 @@ def eval_metric(eval_set, model):
         y_true = np.array([])
         y_pred = np.array([])
         for qids, labels, *input_data in eval_set:
-            logits, _ = model(*input_data)
+            logits = model(*input_data)
             logits = logits.data.cpu().numpy()
             labels = labels.data.cpu().numpy()
             logits = logits.argmax(1)
@@ -59,7 +58,7 @@ def main():
     parser = get_parser()
     args, _ = parser.parse_known_args()
     parser.add_argument('--mode', default='train', choices=['train', 'eval', 'pred', 'decode'], help='run training or evaluation')
-    parser.add_argument('--save_dir', default=f'./saved_models/grn/', help='model output directory')
+    parser.add_argument('--save_dir', default=f'./saved_models/lstm/', help='model output directory')
 
     # data
     parser.add_argument('--cpnet_vocab_path', default='./data/semmed/entity2id.txt')
@@ -111,7 +110,7 @@ def main():
     parser.add_argument('-dlr', '--decoder_lr', default=DECODER_DEFAULT_LR[args.dataset], type=float, help='learning rate')
     parser.add_argument('-mbs', '--mini_batch_size', default=1, type=int)
     parser.add_argument('-ebs', '--eval_batch_size', default=4, type=int)
-    parser.add_argument('--unfreeze_epoch', default=3, type=int)
+    parser.add_argument('--unfreeze_epoch', default=0, type=int)
     parser.add_argument('--refreeze_epoch', default=10000, type=int)
 
     parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS, help='show this help message and exit')
@@ -204,8 +203,8 @@ def train(args):
     grouped_parameters = [
         {'params': [p for n, p in model.encoder.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay, 'lr': args.encoder_lr},
         {'params': [p for n, p in model.encoder.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0, 'lr': args.encoder_lr},
-        {'params': [p for n, p in model.decoder.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay, 'lr': args.decoder_lr},
-        {'params': [p for n, p in model.decoder.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0, 'lr': args.decoder_lr},
+        {'params': [p for n, p in model.decoder.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay, 'lr': args.encoder_lr},
+        {'params': [p for n, p in model.decoder.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0, 'lr': args.encoder_lr},
     ]
     optimizer = OPTIMIZER_CLASSES[args.optim](grouped_parameters)
 
@@ -218,12 +217,12 @@ def train(args):
         scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=max_steps)
 
     print('parameters:')
-    for name, param in model.decoder.named_parameters():
+    for name, param in model.named_parameters():
         if param.requires_grad:
             print('\t{:45}\ttrainable\t{}'.format(name, param.size()))
         else:
             print('\t{:45}\tfixed\t{}'.format(name, param.size()))
-    num_params = sum(p.numel() for p in model.decoder.parameters() if p.requires_grad)
+    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('\ttotal:', num_params)
 
     if args.loss == 'margin_rank':
@@ -256,7 +255,7 @@ def train(args):
             bs = labels.size(0)
             for a in range(0, bs, args.mini_batch_size):
                 b = min(a + args.mini_batch_size, bs)
-                logits, _ = model(*[x[a:b] for x in input_data], layer_id=args.encoder_layer)
+                logits = model(*[x[a:b] for x in input_data], layer_id=args.encoder_layer)
 
                 if args.loss == 'margin_rank':
                     num_choice = logits.size(1)
@@ -293,6 +292,9 @@ def train(args):
             global_step += 1
 
         model.eval()
+        # train_acc = evaluate_accuracy(dataset.train(), model)
+        # dev_acc = evaluate_accuracy(dataset.dev(), model)
+        # test_acc = evaluate_accuracy(dataset.test(), model) if args.test_statements else 0.0
         train_acc, tr_precision, tr_recall, tr_f1, tr_roc_auc = eval_metric(dataset.train(), model)
         dev_acc, d_precision, d_recall, d_f1, d_roc_auc = eval_metric(dataset.dev(), model)
         test_acc, t_precision, t_recall, t_f1, t_roc_auc = eval_metric(dataset.test(), model)
@@ -303,24 +305,21 @@ def train(args):
         print('-' * 71)
         print('| step {:5} | train_acc {:7.4f} | dev_acc {:7.4f} | test_acc {:7.4f} | loss {:7.4f} '.format(global_step, train_acc, dev_acc, test_acc,
                                                                                         tl))
-        print(
-            '| step {:5} | train_precision {:7.4f} | dev_precision {:7.4f} | test_precision {:7.4f} | loss {:7.4f} '.format(
-                global_step,
-                tr_precision,
-                d_precision,
-                t_precision,
-                tl))
-        print('| step {:5} | train_recall {:7.4f} | dev_recall {:7.4f} | test_recall {:7.4f} | loss {:7.4f} '.format(
-            global_step,
-            tr_recall,
-            d_recall,
-            t_recall,
-            tl))
+        print('| step {:5} | train_precision {:7.4f} | dev_precision {:7.4f} | test_precision {:7.4f} | loss {:7.4f} '.format(global_step,
+                                                                                                            tr_precision,
+                                                                                                            d_precision,
+                                                                                                            t_precision,
+                                                                                                            tl))
+        print('| step {:5} | train_recall {:7.4f} | dev_recall {:7.4f} | test_recall {:7.4f} | loss {:7.4f} '.format(global_step,
+                                                                                                            tr_recall,
+                                                                                                            d_recall,
+                                                                                                            t_recall,
+                                                                                                            tl))
         print('| step {:5} | train_f1 {:7.4f} | dev_f1 {:7.4f} | test_f1 {:7.4f} | loss {:7.4f} '.format(global_step,
-                                                                                                         tr_f1,
-                                                                                                         d_f1,
-                                                                                                         t_f1,
-                                                                                                         tl))
+                                                                                                            tr_f1,
+                                                                                                            d_f1,
+                                                                                                            t_f1,
+                                                                                                            tl))
         print('| step {:5} | train_auc {:7.4f} | dev_auc {:7.4f} | test_auc {:7.4f} | loss {:7.4f} '.format(global_step,
                                                                                                             tr_roc_auc,
                                                                                                             d_roc_auc,
@@ -338,8 +337,8 @@ def train(args):
         model.train()
         start_time = time.time()
         if epoch_id > args.unfreeze_epoch and epoch_id - best_dev_epoch >= args.max_epochs_before_stop:
-            # accuary, precision, recall, f1, roc_auc = eval_metric(dataset.test(), model)
-            # print(f'| accuracy: {accuary} | precision: {precision} | recall: {recall} | f1: {f1} | auc: {roc_auc} |')
+            #accuary, precision, recall, f1, roc_auc = eval_metric(dataset.test(), model)
+            #print(f'| accuracy: {accuary} | precision: {precision} | recall: {recall} | f1: {f1} | auc: {roc_auc} |')
             break
     # try:
     #
@@ -348,8 +347,8 @@ def train(args):
 
     print()
     print('training ends in {} steps'.format(global_step))
-    print('best dev auc: {:.4f} (at epoch {})'.format(best_dev_auc, best_dev_epoch))
-    print('final test auc: {:.4f}'.format(final_test_auc))
+    print('best dev acc: {:.4f} (at epoch {})'.format(best_dev_auc, best_dev_epoch))
+    print('final test acc: {:.4f}'.format(final_test_auc))
     print()
 
 

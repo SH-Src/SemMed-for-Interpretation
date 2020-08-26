@@ -537,7 +537,7 @@ class GraphRelationNet(nn.Module):
         else:
             self.pooler = MultiheadAttPoolLayer(n_attention_head, sent_dim, concept_dim)
 
-        self.fc = MLP(concept_dim + sent_dim, fc_dim, 2, n_fc_layer, p_fc, layer_norm=True)
+        self.fc = MLP(concept_dim + sent_dim, fc_dim, 1, n_fc_layer, p_fc, layer_norm=True)
 
         self.dropout_e = nn.Dropout(p_emb)
         self.dropout_fc = nn.Dropout(p_fc)
@@ -660,21 +660,22 @@ class LMGraphRelationNet(nn.Module):
         self.ablation = ablation
         self.use_contextualized = use_contextualized
         self.encoder = TextEncoder(model_name, **encoder_config)
-        self.decoder = GraphRelationNet(k, n_type, n_basis, n_layer, self.encoder.sent_dim, diag_decompose,
-                                        n_concept, n_relation, concept_dim, concept_in_dim, n_attention_head,
-                                        fc_dim, n_fc_layer, att_dim, att_layer_num, p_emb, p_gnn, p_fc,
-                                        pretrained_concept_emb=pretrained_concept_emb, freeze_ent_emb=freeze_ent_emb,
-                                        ablation=ablation, init_range=init_range, eps=eps, use_contextualized=use_contextualized,
-                                        do_init_rn=do_init_rn, do_init_identity=do_init_identity)
+        self.decoder = MLP(self.encoder.sent_dim, fc_dim, 2, n_fc_layer, p_fc, layer_norm=True)
+        # self.decoder = GraphRelationNet(k, n_type, n_basis, n_layer, self.encoder.sent_dim, diag_decompose,
+        #                                 n_concept, n_relation, concept_dim, concept_in_dim, n_attention_head,
+        #                                 fc_dim, n_fc_layer, att_dim, att_layer_num, p_emb, p_gnn, p_fc,
+        #                                 pretrained_concept_emb=pretrained_concept_emb, freeze_ent_emb=freeze_ent_emb,
+        #                                 ablation=ablation, init_range=init_range, eps=eps, use_contextualized=use_contextualized,
+        #                                 do_init_rn=do_init_rn, do_init_identity=do_init_identity)
 
-    def decode(self, *inputs, layer_id=-1):
-        bs, nc = inputs[0].size(0), inputs[0].size(1)
-        logits, _ = self.forward(*inputs, layer_id=layer_id, cache_output=True)
-        path_ids, path_lengths = self.decoder.decode()
-        assert (path_lengths % 2 == 1).all()
-        path_ids = path_ids.view(bs, nc, -1)
-        path_lengths = path_lengths.view(bs, nc)
-        return logits, path_ids, path_lengths
+    # def decode(self, *inputs, layer_id=-1):
+    #     bs, nc = inputs[0].size(0), inputs[0].size(1)
+    #     logits, _ = self.forward(*inputs, layer_id=layer_id, cache_output=True)
+    #     path_ids, path_lengths = self.decoder.decode()
+    #     assert (path_lengths % 2 == 1).all()
+    #     path_ids = path_ids.view(bs, nc, -1)
+    #     path_lengths = path_lengths.view(bs, nc)
+    #     return logits, path_ids, path_lengths
 
     def forward(self, *inputs, layer_id=-1, cache_output=False):
         """
@@ -697,11 +698,12 @@ class LMGraphRelationNet(nn.Module):
             sent_vecs, all_hidden_states = self.encoder(*lm_inputs, layer_id=layer_id)
         else:
             sent_vecs = torch.ones((bs * nc, self.encoder.sent_dim), dtype=torch.float)
-        logits, attn = self.decoder(sent_vecs.to(concept_ids.device), concept_ids, node_type_ids, adj_lengths, adj,
-                                    emb_data=emb_data, cache_output=cache_output)
+        # logits, attn = self.decoder(sent_vecs.to(concept_ids.device), concept_ids, node_type_ids, adj_lengths, adj,
+        #                             emb_data=emb_data, cache_output=cache_output)
         #logits = logits.view(bs, nc)
+        logits = self.decoder(sent_vecs)
         logits = logits.view(bs, 2)
-        return logits, attn
+        return logits #, attn
 
 
 class LMGraphRelationNetDataLoader(object):
@@ -725,7 +727,8 @@ class LMGraphRelationNetDataLoader(object):
         self.dev_qids, self.dev_labels, *self.dev_encoder_data = load_input_tensors(dev_statement_path, model_type, model_name, max_seq_length, max_num_pervisit, format=format)
 
         num_choice = self.train_encoder_data[0].size(1)
-        #print("encoder data size: ", self.train_encoder_data[1])
+        print("encoder data size: ", self.train_encoder_data[0].shape)
+        print('labels: ', str(self.train_labels.data.numpy().tolist()).count("0"))
         *self.train_decoder_data, self.train_adj_data, n_rel = load_adj_data(train_adj_path, max_node_num, num_choice, emb_pk_path=train_embs_path if use_contextualized else None)
         *self.dev_decoder_data, self.dev_adj_data, n_rel = load_adj_data(dev_adj_path, max_node_num, num_choice, emb_pk_path=dev_embs_path if use_contextualized else None)
         assert all(len(self.train_qids) == len(self.train_adj_data) == x.size(0) for x in [self.train_labels] + self.train_encoder_data + self.train_decoder_data)

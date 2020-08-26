@@ -723,7 +723,7 @@ def load_lstm_input_tensors(input_jsonl_path, max_seq_length, max_num_pervisit):
         id2cui = [c.strip().split("	")[0] for c in fin]
     cui2id = {c: i for i, c in enumerate(id2cui)}
     qids, labels, input_ids, input_lengths = [], [], [], []
-    pad_id = 41051 # last id of embedding
+    pad_id = len(id2cui) # last id of embedding
     pad_seq = []
     for i in range(max_num_pervisit):
         pad_seq.append(pad_id)
@@ -747,8 +747,9 @@ def load_lstm_input_tensors(input_jsonl_path, max_seq_length, max_num_pervisit):
             for j in range(0, (max_seq_length-len(record_ids))):
                 record_ids.append(pad_seq)
             input_ids.append(record_ids)
-
-    labels = torch.tensor(labels, dtype=torch.float)
+    for l in labels:
+        assert l in [0, 1]
+    labels = torch.tensor(labels, dtype=torch.long)
     #labels = labels.unsqueeze(1)
     input_ids = torch.tensor(input_ids, dtype=torch.long)
     input_ids = input_ids.unsqueeze(1)
