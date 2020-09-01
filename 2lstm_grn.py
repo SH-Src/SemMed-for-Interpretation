@@ -3,7 +3,7 @@ import random
 from tqdm import tqdm
 from transformers import (ConstantLRSchedule, WarmupLinearSchedule, WarmupConstantSchedule)
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-from modeling.modeling_grn import *
+from modeling.modeling_2lstm_grn import *
 from utils.optimization_utils import OPTIMIZER_CLASSES
 from utils.parser_utils import *
 from utils.relpath_utils import *
@@ -59,7 +59,7 @@ def main():
     parser = get_parser()
     args, _ = parser.parse_known_args()
     parser.add_argument('--mode', default='train', choices=['train', 'eval', 'pred', 'decode'], help='run training or evaluation')
-    parser.add_argument('--save_dir', default=f'./saved_models/grn/', help='model output directory')
+    parser.add_argument('--save_dir', default=f'./saved_models/2lstm_grn/', help='model output directory')
 
     # data
     parser.add_argument('--cpnet_vocab_path', default='./data/semmed/entity2id.txt')
@@ -109,8 +109,8 @@ def main():
 
     # optimization
     parser.add_argument('-dlr', '--decoder_lr', default=DECODER_DEFAULT_LR[args.dataset], type=float, help='learning rate')
-    parser.add_argument('-mbs', '--mini_batch_size', default=1, type=int)
-    parser.add_argument('-ebs', '--eval_batch_size', default=4, type=int)
+    parser.add_argument('-mbs', '--mini_batch_size', default=16, type=int)
+    parser.add_argument('-ebs', '--eval_batch_size', default=32, type=int)
     parser.add_argument('--unfreeze_epoch', default=3, type=int)
     parser.add_argument('--refreeze_epoch', default=10000, type=int)
 
@@ -178,7 +178,7 @@ def train(args):
         #   Build model                                                                                   #
         ###################################################################################################
 
-        lstm_config = get_lstm_config_from_args(args)
+        lstm_config = get_2lstm_config_from_args(args)
         model = LMGraphRelationNet(args.encoder, k=args.k, n_type=3, n_basis=args.num_basis, n_layer=args.gnn_layer_num,
                                    diag_decompose=args.diag_decompose, n_concept=concept_num,
                                    n_relation=args.num_relation, concept_dim=args.gnn_dim,
@@ -204,6 +204,10 @@ def train(args):
     grouped_parameters = [
         {'params': [p for n, p in model.encoder.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay, 'lr': args.encoder_lr},
         {'params': [p for n, p in model.encoder.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0, 'lr': args.encoder_lr},
+        {'params': [p for n, p in model.encoder2.named_parameters() if not any(nd in n for nd in no_decay)],
+         'weight_decay': args.weight_decay, 'lr': args.encoder_lr},
+        {'params': [p for n, p in model.encoder2.named_parameters() if any(nd in n for nd in no_decay)],
+         'weight_decay': 0.0, 'lr': args.encoder_lr},
         {'params': [p for n, p in model.decoder.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay, 'lr': args.decoder_lr},
         {'params': [p for n, p in model.decoder.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0, 'lr': args.decoder_lr},
     ]

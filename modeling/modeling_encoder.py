@@ -22,7 +22,7 @@ MODEL_NAME_TO_CLASS = {model_name: model_class for model_class, model_name_list 
 class LSTMTextEncoder(nn.Module):
     pool_layer_classes = {'mean': MeanPoolLayer, 'max': MaxPoolLayer}
 
-    def __init__(self, vocab_size=41052, emb_size=300, hidden_size=300, output_size=300, num_layers=2, bidirectional=True,
+    def __init__(self, vocab_size=8693, emb_size=200, hidden_size=300, output_size=300, num_layers=2, bidirectional=True,
                  emb_p=0.0, input_p=0.0, hidden_p=0.0, pretrained_emb_or_path='', freeze_emb=True,
                  pool_function='max', output_hidden_states=False):
         super().__init__()

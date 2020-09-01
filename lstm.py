@@ -61,7 +61,7 @@ def main():
     parser.add_argument('--save_dir', default=f'./saved_models/lstm/', help='model output directory')
 
     # data
-    parser.add_argument('--cpnet_vocab_path', default='./data/semmed/entity2id.txt')
+    parser.add_argument('--cpnet_vocab_path', default='./data/semmed/sub_cui_vocab.txt')
     parser.add_argument('--num_relation', default=66, type=int, help='number of relations')
     parser.add_argument('--train_adj', default=f'./data/{args.dataset}/graph/train.graph.adj.pk')
     parser.add_argument('--dev_adj', default=f'./data/{args.dataset}/graph/dev.graph.adj.pk')

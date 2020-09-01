@@ -12,7 +12,7 @@ from utils.semmed import relations
 DECODER_DEFAULT_LR = {
     'csqa': 1e-3,
     'obqa': 3e-4,
-    'hfdata': 1e-3
+    'hfdata': 3e-5
 }
 
 
@@ -21,20 +21,19 @@ def get_node_feature_encoder(encoder_name):
 
 
 def evaluate_accuracy(eval_set, model):
-    n_samples, n_correct = 0, 0
+    #n_samples, n_correct = 0, 0
     model.eval()
     with torch.no_grad():
+        y_true = np.array([])
+        y_pred = np.array([])
         for qids, labels, *input_data in eval_set:
             logits, _ = model(*input_data)
-            for i in range(logits.size(0)):
-                if logits[i] >= 0:
-                    logits[i] = 1
-                else:
-                    logits[i] = 0
-                if logits[i] == labels[i]:
-                    n_correct += 1
-            n_samples += labels.size(0)
-    return n_correct / n_samples
+            logits = logits.data.cpu().numpy()
+            labels = labels.data.cpu().numpy()
+            logits = logits.argmax(1)
+            y_true = np.concatenate((y_true, labels))
+            y_pred = np.concatenate((y_pred, logits))
+    return accuracy_score(y_true, y_pred)
 
 def eval_metric(eval_set, model):
     model.eval()
@@ -45,11 +44,7 @@ def eval_metric(eval_set, model):
             logits, _ = model(*input_data)
             logits = logits.data.cpu().numpy()
             labels = labels.data.cpu().numpy()
-            for i in range(len(logits)):
-                if logits[i] >= 0:
-                    logits[i] = 1
-                else:
-                    logits[i] = 0
+            logits = logits.argmax(1)
             y_true = np.concatenate((y_true, labels))
             y_pred = np.concatenate((y_pred, logits))
         accuary = accuracy_score(y_true, y_pred)
@@ -64,11 +59,11 @@ def main():
     parser = get_parser()
     args, _ = parser.parse_known_args()
     parser.add_argument('--mode', default='train', choices=['train', 'eval', 'pred', 'decode'], help='run training or evaluation')
-    parser.add_argument('--save_dir', default=f'./saved_models/grn/', help='model output directory')
+    parser.add_argument('--save_dir', default=f'./saved_models/grns/', help='model output directory')
 
     # data
     parser.add_argument('--cpnet_vocab_path', default='./data/semmed/entity2id.txt')
-    parser.add_argument('--num_relation', default=66, type=int, help='number of relations')
+    parser.add_argument('--num_relation', default=18, type=int, help='number of relations')
     parser.add_argument('--train_adj', default=f'./data/{args.dataset}/graph/train.graph.adj.pk')
     parser.add_argument('--dev_adj', default=f'./data/{args.dataset}/graph/dev.graph.adj.pk')
     parser.add_argument('--test_adj', default=f'./data/{args.dataset}/graph/test.graph.adj.pk')
@@ -82,7 +77,7 @@ def main():
 
     # model architecture
     parser.add_argument('-k', '--k', default=2, type=int, help='perform k-hop message passing at each layer')
-    parser.add_argument('--ablation', default=[], choices=['no_trans', 'early_relu', 'no_att', 'ctx_trans', 'q2a_only',
+    parser.add_argument('--ablation', default=['no_trans'], choices=['no_trans', 'early_relu', 'no_att', 'ctx_trans', 'q2a_only',
                                                            'no_typed_transform', 'no_type_att', 'typed_pool', 'no_unary',
                                                            'detach_s_agg', 'detach_s_all', 'detach_s_pool', 'agg_self_loop',
                                                            'early_trans', 'pool_qc', 'pool_ac', 'pool_all',
@@ -235,6 +230,8 @@ def train(args):
         loss_func = nn.MarginRankingLoss(margin=0.1, reduction='mean')
     elif args.loss == 'BCE':
         loss_func = nn.BCEWithLogitsLoss(reduction='mean')
+    elif args.loss == 'cross_entropy':
+        loss_func = nn.CrossEntropyLoss(reduction='mean')
 
     ###################################################################################################
     #   Training                                                                                      #
@@ -243,15 +240,16 @@ def train(args):
     print()
     print('-' * 71)
     global_step, best_dev_epoch = 0, 0
-    best_dev_acc, final_test_acc, total_loss = 0.0, 0.0, 0.0
+    best_dev_auc, final_test_auc, total_loss = 0.0, 0.0, 0.0
     start_time = time.time()
     model.train()
-    freeze_net(model.encoder)
+    #freeze_net(model.encoder)
     for epoch_id in range(args.n_epochs):
-        if epoch_id == args.unfreeze_epoch:
-            unfreeze_net(model.encoder)
-        if epoch_id == args.refreeze_epoch:
-            freeze_net(model.encoder)
+        print('epoch: {:5} '.format(epoch_id))
+        # if epoch_id == args.unfreeze_epoch:
+        #     unfreeze_net(model.encoder)
+        # if epoch_id == args.refreeze_epoch:
+        #     freeze_net(model.encoder)
         model.train()
         for qids, labels, *input_data in dataset.train():
             optimizer.zero_grad()
@@ -271,7 +269,7 @@ def train(args):
                     wrong_logits = flat_logits[correct_mask == 0]  # of length batch_size*(num_choice-1)
                     y = wrong_logits.new_ones((wrong_logits.size(0),))
                     loss = loss_func(correct_logits, wrong_logits, y)  # margin ranking loss
-                elif args.loss == 'BCE':
+                elif args.loss == 'cross_entropy':
                     # print(labels[a:b])
                     # print(logits)
                     loss = loss_func(logits, labels[a:b])
@@ -295,29 +293,53 @@ def train(args):
             global_step += 1
 
         model.eval()
-        dev_acc = evaluate_accuracy(dataset.dev(), model)
-        test_acc = evaluate_accuracy(dataset.test(), model) if args.test_statements else 0.0
+        train_acc, tr_precision, tr_recall, tr_f1, tr_roc_auc = eval_metric(dataset.train(), model)
+        dev_acc, d_precision, d_recall, d_f1, d_roc_auc = eval_metric(dataset.dev(), model)
+        test_acc, t_precision, t_recall, t_f1, t_roc_auc = eval_metric(dataset.test(), model)
         if (global_step) % args.log_interval == 0:
             tl = total_loss
         else:
             tl = total_loss / (global_step % args.log_interval)
         print('-' * 71)
-        print('| step {:5} | dev_acc {:7.4f} | test_acc {:7.4f} | loss {:7.4f} '.format(global_step, dev_acc, test_acc,
+        print('| step {:5} | train_acc {:7.4f} | dev_acc {:7.4f} | test_acc {:7.4f} | loss {:7.4f} '.format(global_step, train_acc, dev_acc, test_acc,
                                                                                         tl))
+        print(
+            '| step {:5} | train_precision {:7.4f} | dev_precision {:7.4f} | test_precision {:7.4f} | loss {:7.4f} '.format(
+                global_step,
+                tr_precision,
+                d_precision,
+                t_precision,
+                tl))
+        print('| step {:5} | train_recall {:7.4f} | dev_recall {:7.4f} | test_recall {:7.4f} | loss {:7.4f} '.format(
+            global_step,
+            tr_recall,
+            d_recall,
+            t_recall,
+            tl))
+        print('| step {:5} | train_f1 {:7.4f} | dev_f1 {:7.4f} | test_f1 {:7.4f} | loss {:7.4f} '.format(global_step,
+                                                                                                         tr_f1,
+                                                                                                         d_f1,
+                                                                                                         t_f1,
+                                                                                                         tl))
+        print('| step {:5} | train_auc {:7.4f} | dev_auc {:7.4f} | test_auc {:7.4f} | loss {:7.4f} '.format(global_step,
+                                                                                                            tr_roc_auc,
+                                                                                                            d_roc_auc,
+                                                                                                            t_roc_auc,
+                                                                                                            tl))
         print('-' * 71)
         with open(log_path, 'a') as fout:
-            fout.write('{},{},{}\n'.format(global_step, dev_acc, test_acc))
-        if dev_acc >= best_dev_acc:
-            best_dev_acc = dev_acc
-            final_test_acc = test_acc
+            fout.write('{},{},{}\n'.format(global_step, d_roc_auc, t_roc_auc))
+        if d_roc_auc >= best_dev_auc:
+            best_dev_auc = d_roc_auc
+            final_test_auc = t_roc_auc
             best_dev_epoch = epoch_id
             torch.save([model, args], model_path)
             print(f'model saved to {model_path}')
         model.train()
         start_time = time.time()
         if epoch_id > args.unfreeze_epoch and epoch_id - best_dev_epoch >= args.max_epochs_before_stop:
-            accuary, precision, recall, f1, roc_auc = eval_metric(dataset.test(), model)
-            print(accuary, precision, recall, f1, roc_auc)
+            # accuary, precision, recall, f1, roc_auc = eval_metric(dataset.test(), model)
+            # print(f'| accuracy: {accuary} | precision: {precision} | recall: {recall} | f1: {f1} | auc: {roc_auc} |')
             break
     # try:
     #
@@ -326,8 +348,8 @@ def train(args):
 
     print()
     print('training ends in {} steps'.format(global_step))
-    print('best dev acc: {:.4f} (at epoch {})'.format(best_dev_acc, best_dev_epoch))
-    print('final test acc: {:.4f}'.format(final_test_acc))
+    print('best dev auc: {:.4f} (at epoch {})'.format(best_dev_auc, best_dev_epoch))
+    print('final test auc: {:.4f}'.format(final_test_auc))
     print()
 
 

@@ -17,7 +17,7 @@ ENCODER_DEFAULT_LR = {
         'roberta-large': 1e-5,
     },
     'hfdata': {
-        'lstm': 3e-5
+        'lstm': 2e-5
     }
 }
 
@@ -75,15 +75,29 @@ def add_encoder_arguments(parser):
     parser.add_argument('--encoder_layer', default=-1, type=int, help='encoder layer ID to use as features (used only by non-LSTM encoders)')
     parser.add_argument('-elr', '--encoder_lr', default=2e-5, type=float, help='learning rate')
     # used only for LSTM encoder
-    parser.add_argument('--encoder_dim', default=128, type=int, help='number of LSTM hidden units')
+    parser.add_argument('--encoder_dim', default=64, type=int, help='number of LSTM hidden units')
     parser.add_argument('--encoder_layer_num', default=2, type=int, help='number of LSTM layers')
     parser.add_argument('--encoder_bidir', default=True, type=bool_flag, nargs='?', const=True, help='use BiLSTM')
     parser.add_argument('--encoder_dropoute', default=0.1, type=float, help='word dropout')
     parser.add_argument('--encoder_dropouti', default=0.1, type=float, help='dropout applied to embeddings')
     parser.add_argument('--encoder_dropouth', default=0.1, type=float, help='dropout applied to lstm hidden states')
     parser.add_argument('--encoder_pretrained_emb', default='./data/semmed/cui_embedding.npy', help='path to pretrained emb in .npy format')
-    parser.add_argument('--encoder_freeze_emb', default=True, type=bool_flag, nargs='?', const=True, help='freeze lstm input embedding layer')
+    parser.add_argument('--encoder_freeze_emb', default=False, type=bool_flag, nargs='?', const=False, help='freeze lstm input embedding layer')
     parser.add_argument('--encoder_pooler', default='max', choices=['max', 'mean'], help='pooling function')
+
+    parser.add_argument('--encoder_dim1', default=128, type=int, help='number of LSTM hidden units')
+    parser.add_argument('--encoder_layer_num1', default=2, type=int, help='number of LSTM layers')
+    parser.add_argument('--encoder_bidir1', default=True, type=bool_flag, nargs='?', const=True, help='use BiLSTM')
+    parser.add_argument('--encoder_dropoute1', default=0.1, type=float, help='word dropout')
+    parser.add_argument('--encoder_dropouti1', default=0.1, type=float, help='dropout applied to embeddings')
+    parser.add_argument('--encoder_dropouth1', default=0.1, type=float, help='dropout applied to lstm hidden states')
+    parser.add_argument('--encoder_pretrained_emb1', default='',
+                        help='path to pretrained emb in .npy format')
+    parser.add_argument('--encoder_freeze_emb1', default=False, type=bool_flag, nargs='?', const=False,
+                        help='freeze lstm input embedding layer')
+    parser.add_argument('--encoder_emb_size1', default=200, type=int, help='embedding size of input')
+    parser.add_argument('--encoder_pooler1', default='max', choices=['max', 'mean'], help='pooling function')
+
     args, _ = parser.parse_known_args()
     parser.set_defaults(encoder_lr=ENCODER_DEFAULT_LR[args.dataset].get(args.encoder, ENCODER_DEFAULT_LR['default']))
 
@@ -122,6 +136,22 @@ def get_parser():
 
 def get_lstm_config_from_args(args):
     lstm_config = {
+        'emb_size': args.encoder_emb_size1,
+        'hidden_size': args.encoder_dim1,
+        'output_size': args.encoder_dim1,
+        'num_layers': args.encoder_layer_num1,
+        'bidirectional': args.encoder_bidir1,
+        'emb_p': args.encoder_dropoute1,
+        'input_p': args.encoder_dropouti1,
+        'hidden_p': args.encoder_dropouth1,
+        'pretrained_emb_or_path': args.encoder_pretrained_emb1,
+        'freeze_emb': args.encoder_freeze_emb1,
+        'pool_function': args.encoder_pooler1,
+    }
+    return lstm_config
+
+def get_2lstm_config_from_args(args):
+    lstm_config = {
         'hidden_size': args.encoder_dim,
         'output_size': args.encoder_dim,
         'num_layers': args.encoder_layer_num,
@@ -133,4 +163,17 @@ def get_lstm_config_from_args(args):
         'freeze_emb': args.encoder_freeze_emb,
         'pool_function': args.encoder_pooler,
     }
-    return lstm_config
+    lstm_config1 = {
+        'emb_size': args.encoder_emb_size1,
+        'hidden_size': args.encoder_dim1,
+        'output_size': args.encoder_dim1,
+        'num_layers': args.encoder_layer_num1,
+        'bidirectional': args.encoder_bidir1,
+        'emb_p': args.encoder_dropoute1,
+        'input_p': args.encoder_dropouti1,
+        'hidden_p': args.encoder_dropouth1,
+        'pretrained_emb_or_path': args.encoder_pretrained_emb1,
+        'freeze_emb': args.encoder_freeze_emb1,
+        'pool_function': args.encoder_pooler1,
+    }
+    return lstm_config, lstm_config1

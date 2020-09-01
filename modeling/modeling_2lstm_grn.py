@@ -537,7 +537,7 @@ class GraphRelationNet(nn.Module):
         else:
             self.pooler = MultiheadAttPoolLayer(n_attention_head, sent_dim, concept_dim)
 
-        self.fc = MLP(concept_dim + sent_dim, fc_dim, 1, n_fc_layer, p_fc, layer_norm=True)
+        self.fc = MLP(concept_dim + sent_dim, fc_dim, 2, n_fc_layer, p_fc, layer_norm=True)
 
         self.dropout_e = nn.Dropout(p_emb)
         self.dropout_fc = nn.Dropout(p_fc)
@@ -655,27 +655,29 @@ class LMGraphRelationNet(nn.Module):
                  fc_dim, n_fc_layer, att_dim, att_layer_num, p_emb, p_gnn, p_fc,
                  pretrained_concept_emb=None, freeze_ent_emb=True, ablation=None,
                  init_range=0.0, eps=1e-20, use_contextualized=False,
-                 do_init_rn=False, do_init_identity=False, encoder_config={}):
+                 do_init_rn=False, do_init_identity=False, encoder_config=None):
         super().__init__()
         self.ablation = ablation
         self.use_contextualized = use_contextualized
-        self.encoder = TextEncoder(model_name, **encoder_config)
-        self.decoder = MLP(self.encoder.sent_dim, fc_dim, 2, n_fc_layer, p_fc, layer_norm=True)
-        # self.decoder = GraphRelationNet(k, n_type, n_basis, n_layer, self.encoder.sent_dim, diag_decompose,
-        #                                 n_concept, n_relation, concept_dim, concept_in_dim, n_attention_head,
-        #                                 fc_dim, n_fc_layer, att_dim, att_layer_num, p_emb, p_gnn, p_fc,
-        #                                 pretrained_concept_emb=pretrained_concept_emb, freeze_ent_emb=freeze_ent_emb,
-        #                                 ablation=ablation, init_range=init_range, eps=eps, use_contextualized=use_contextualized,
-        #                                 do_init_rn=do_init_rn, do_init_identity=do_init_identity)
+        self.encoder = TextEncoder(model_name, **encoder_config[0])
+        self.encoder2 = TextEncoder(model_name, **encoder_config[1])
 
-    # def decode(self, *inputs, layer_id=-1):
-    #     bs, nc = inputs[0].size(0), inputs[0].size(1)
-    #     logits, _ = self.forward(*inputs, layer_id=layer_id, cache_output=True)
-    #     path_ids, path_lengths = self.decoder.decode()
-    #     assert (path_lengths % 2 == 1).all()
-    #     path_ids = path_ids.view(bs, nc, -1)
-    #     path_lengths = path_lengths.view(bs, nc)
-    #     return logits, path_ids, path_lengths
+        #self.decoder = MLP(self.encoder.sent_dim + self.encoder2.sent_dim, fc_dim, 2, n_fc_layer, p_fc, layer_norm=True)
+        self.decoder = GraphRelationNet(k, n_type, n_basis, n_layer, self.encoder.sent_dim + self.encoder2.sent_dim, diag_decompose,
+                                        n_concept, n_relation, concept_dim, concept_in_dim, n_attention_head,
+                                        fc_dim, n_fc_layer, att_dim, att_layer_num, p_emb, p_gnn, p_fc,
+                                        pretrained_concept_emb=pretrained_concept_emb, freeze_ent_emb=freeze_ent_emb,
+                                        ablation=ablation, init_range=init_range, eps=eps, use_contextualized=use_contextualized,
+                                        do_init_rn=do_init_rn, do_init_identity=do_init_identity)
+
+    def decode(self, *inputs, layer_id=-1):
+        bs, nc = inputs[0].size(0), inputs[0].size(1)
+        logits, _ = self.forward(*inputs, layer_id=layer_id, cache_output=True)
+        path_ids, path_lengths = self.decoder.decode()
+        assert (path_lengths % 2 == 1).all()
+        path_ids = path_ids.view(bs, nc, -1)
+        path_lengths = path_lengths.view(bs, nc)
+        return logits, path_ids, path_lengths
 
     def forward(self, *inputs, layer_id=-1, cache_output=False):
         """
@@ -690,20 +692,23 @@ class LMGraphRelationNet(nn.Module):
         bs, nc = inputs[0].size(0), inputs[0].size(1)
         inputs = [x.view(x.size(0) * x.size(1), *x.size()[2:]) for x in inputs]  # merge the batch dimension and the num_choice dimension
         if not self.use_contextualized:
-            *lm_inputs, concept_ids, node_type_ids, adj_lengths, adj = inputs
+            input1, length1, input2, length2, concept_ids, node_type_ids, adj_lengths, adj = inputs
             emb_data = None
         else:
-            *lm_inputs, concept_ids, node_type_ids, adj_lengths, emb_data, adj = inputs
+            input1, length1, input2, length2, concept_ids, node_type_ids, adj_lengths, emb_data, adj = inputs
         if 'no_lm' not in self.ablation:
-            sent_vecs, all_hidden_states = self.encoder(*lm_inputs, layer_id=layer_id)
+            sent_vecs, all_hidden_states = self.encoder(input1, length1, layer_id=layer_id)
+            sent_vecs2, all_hidden_states2 = self.encoder2(input2, length2, layer_id=layer_id)
         else:
             sent_vecs = torch.ones((bs * nc, self.encoder.sent_dim), dtype=torch.float)
-        # logits, attn = self.decoder(sent_vecs.to(concept_ids.device), concept_ids, node_type_ids, adj_lengths, adj,
-        #                             emb_data=emb_data, cache_output=cache_output)
+            sent_vecs2 = torch.ones((bs * nc, self.encoder2.sent_dim), dtype=torch.float)
+        sent_vecs_all = torch.cat((sent_vecs, sent_vecs2), 1)
+        logits, attn = self.decoder(sent_vecs_all.to(concept_ids.device), concept_ids, node_type_ids, adj_lengths, adj,
+                                    emb_data=emb_data, cache_output=cache_output)
         #logits = logits.view(bs, nc)
-        logits = self.decoder(sent_vecs)
+        # logits = self.decoder(torch.cat((sent_vecs, sent_vecs2), 1))
         logits = logits.view(bs, 2)
-        return logits #, attn
+        return logits, attn
 
 
 class LMGraphRelationNetDataLoader(object):
@@ -723,13 +728,10 @@ class LMGraphRelationNetDataLoader(object):
         self.use_contextualized = use_contextualized
 
         model_type = MODEL_NAME_TO_CLASS[model_name]
-        self.train_qids, self.train_labels, *self.train_encoder_data = load_input_tensors(train_statement_path, model_type, model_name, max_seq_length, max_num_pervisit, format=format)
-        self.dev_qids, self.dev_labels, *self.dev_encoder_data = load_input_tensors(dev_statement_path, model_type, model_name, max_seq_length, max_num_pervisit, format=format)
+        self.train_qids, self.train_labels, self.train_encoder_data, self.train_encoder_data2 = load_lstm_multi_input_tensors(train_statement_path, max_seq_length, max_num_pervisit)
+        self.dev_qids, self.dev_labels, self.dev_encoder_data, self.dev_encoder_data2 = load_lstm_multi_input_tensors(dev_statement_path, max_seq_length, max_num_pervisit)
 
         num_choice = self.train_encoder_data[0].size(1)
-        # print("encoder data size: ", self.train_encoder_data[0].shape, self.train_encoder_data[1].shape)
-        # print(self.train_encoder_data[1])
-        # print('labels: ', str(self.train_labels.data.numpy().tolist()).count("0"))
         *self.train_decoder_data, self.train_adj_data, n_rel = load_adj_data(train_adj_path, max_node_num, num_choice, emb_pk_path=train_embs_path if use_contextualized else None)
         *self.dev_decoder_data, self.dev_adj_data, n_rel = load_adj_data(dev_adj_path, max_node_num, num_choice, emb_pk_path=dev_embs_path if use_contextualized else None)
         assert all(len(self.train_qids) == len(self.train_adj_data) == x.size(0) for x in [self.train_labels] + self.train_encoder_data + self.train_decoder_data)
@@ -740,7 +742,7 @@ class LMGraphRelationNetDataLoader(object):
         self.eval_adj_empty = torch.zeros((self.eval_batch_size, num_choice, n_rel - 1, max_node_num, max_node_num), dtype=torch.float32)
 
         if test_statement_path is not None:
-            self.test_qids, self.test_labels, *self.test_encoder_data = load_input_tensors(test_statement_path, model_type, model_name, max_seq_length, max_num_pervisit, format=format)
+            self.test_qids, self.test_labels, self.test_encoder_data, self.test_encoder_data2 = load_lstm_multi_input_tensors(test_statement_path, max_seq_length, max_num_pervisit)
             *self.test_decoder_data, self.test_adj_data, n_rel = load_adj_data(test_adj_path, max_node_num, num_choice, emb_pk_path=test_embs_path if use_contextualized else None)
             assert all(len(self.test_qids) == len(self.test_adj_data) == x.size(0) for x in [self.test_labels] + self.test_encoder_data + self.test_decoder_data)
 
@@ -786,24 +788,24 @@ class LMGraphRelationNetDataLoader(object):
             train_indexes = self.inhouse_train_indexes[torch.randperm(n_train)]
         else:
             train_indexes = torch.randperm(len(self.train_qids))
-        return MultiGPUAdjDataBatchGenerator(self.device0, self.device1, self.batch_size, train_indexes, self.train_qids, self.train_labels,
-                                             tensors0=self.train_encoder_data, tensors1=self.train_decoder_data, adj_empty=self.adj_empty, adj_data=self.train_adj_data)
+        return MultiGPUAdjDataBatchGenerator2(self.device0, self.device1, self.batch_size, train_indexes, self.train_qids, self.train_labels,
+                                             tensors0=self.train_encoder_data, tensors1=self.train_encoder_data2, tensors2=self.train_decoder_data, adj_empty=self.adj_empty, adj_data=self.train_adj_data)
 
     def train_eval(self):
-        return MultiGPUAdjDataBatchGenerator(self.device0, self.device1, self.eval_batch_size, torch.arange(len(self.train_qids)), self.train_qids, self.train_labels,
-                                             tensors0=self.train_encoder_data, tensors1=self.train_decoder_data, adj_empty=self.eval_adj_empty, adj_data=self.train_adj_data)
+        return MultiGPUAdjDataBatchGenerator2(self.device0, self.device1, self.eval_batch_size, torch.arange(len(self.train_qids)), self.train_qids, self.train_labels,
+                                             tensors0=self.train_encoder_data, tensors1=self.train_encoder_data2, tensors2=self.train_decoder_data, adj_empty=self.eval_adj_empty, adj_data=self.train_adj_data)
 
     def dev(self):
-        return MultiGPUAdjDataBatchGenerator(self.device0, self.device1, self.eval_batch_size, torch.arange(len(self.dev_qids)), self.dev_qids, self.dev_labels,
-                                             tensors0=self.dev_encoder_data, tensors1=self.dev_decoder_data, adj_empty=self.eval_adj_empty, adj_data=self.dev_adj_data)
+        return MultiGPUAdjDataBatchGenerator2(self.device0, self.device1, self.eval_batch_size, torch.arange(len(self.dev_qids)), self.dev_qids, self.dev_labels,
+                                             tensors0=self.dev_encoder_data, tensors1=self.train_encoder_data2, tensors2=self.train_decoder_data, adj_empty=self.eval_adj_empty, adj_data=self.dev_adj_data)
 
     def test(self):
         if self.is_inhouse:
-            return MultiGPUAdjDataBatchGenerator(self.device0, self.device1, self.eval_batch_size, self.inhouse_test_indexes, self.train_qids, self.train_labels,
-                                                 tensors0=self.train_encoder_data, tensors1=self.train_decoder_data, adj_empty=self.eval_adj_empty, adj_data=self.train_adj_data)
+            return MultiGPUAdjDataBatchGenerator2(self.device0, self.device1, self.eval_batch_size, self.inhouse_test_indexes, self.train_qids, self.train_labels,
+                                                 tensors0=self.train_encoder_data, tensors1=self.train_encoder_data2, tensors2=self.train_decoder_data, adj_empty=self.eval_adj_empty, adj_data=self.train_adj_data)
         else:
-            return MultiGPUAdjDataBatchGenerator(self.device0, self.device1, self.eval_batch_size, torch.arange(len(self.test_qids)), self.test_qids, self.test_labels,
-                                                 tensors0=self.test_encoder_data, tensors1=self.test_decoder_data, adj_empty=self.eval_adj_empty, adj_data=self.test_adj_data)
+            return MultiGPUAdjDataBatchGenerator2(self.device0, self.device1, self.eval_batch_size, torch.arange(len(self.test_qids)), self.test_qids, self.test_labels,
+                                                 tensors0=self.test_encoder_data, tensors1=self.train_encoder_data2, tensors2=self.train_decoder_data, adj_empty=self.eval_adj_empty, adj_data=self.test_adj_data)
 
 
 def run_test():

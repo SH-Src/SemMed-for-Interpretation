@@ -124,6 +124,62 @@ class AdjDataBatchGenerator(object):
         else:
             return obj.to(self.device)
 
+class MultiGPUAdjDataBatchGenerator2(object):
+    """
+    this version DOES NOT add the identity matrix
+    tensors0, lists0  are on device0
+    tensors1, lists1, adj, labels  are on device1
+    """
+
+    def __init__(self, device0, device1, batch_size, indexes, qids, labels,
+                 tensors0=[], lists0=[], tensors1=[], lists1=[], tensors2=[], lists2=[], adj_empty=None, adj_data=None):
+        self.device0 = device0
+        self.device1 = device1
+        self.batch_size = batch_size
+        self.indexes = indexes
+        self.qids = qids
+        self.labels = labels
+        self.tensors0 = tensors0
+        self.lists0 = lists0
+        self.tensors1 = tensors1
+        self.lists1 = lists1
+        self.tensors2 = tensors2
+        self.lists2 = lists2
+        self.adj_empty = adj_empty.to(self.device1)
+        self.adj_data = adj_data
+
+    def __len__(self):
+        return (self.indexes.size(0) - 1) // self.batch_size + 1
+
+    def __iter__(self):
+        batch_adj = self.adj_empty  # (batch_size, num_choice, n_rel, n_node, n_node)
+        batch_adj[:] = 0
+        bs = self.batch_size
+        n = self.indexes.size(0)
+        for a in range(0, n, bs):
+            b = min(n, a + bs)
+            batch_indexes = self.indexes[a:b]
+            batch_qids = [self.qids[idx] for idx in batch_indexes]
+            batch_labels = self._to_device(self.labels[batch_indexes], self.device1)
+            batch_tensors0 = [self._to_device(x[batch_indexes], self.device0) for x in self.tensors0]
+            batch_tensors1 = [self._to_device(x[batch_indexes], self.device0) for x in self.tensors1]
+            batch_tensors2 = [self._to_device(x[batch_indexes], self.device1) for x in self.tensors2]
+            batch_lists0 = [self._to_device([x[i] for i in batch_indexes], self.device0) for x in self.lists0]
+            batch_lists1 = [self._to_device([x[i] for i in batch_indexes], self.device0) for x in self.lists1]
+            batch_lists2 = [self._to_device([x[i] for i in batch_indexes], self.device1) for x in self.lists2]
+
+            batch_adj[:] = 0
+            for batch_id, global_id in enumerate(batch_indexes):
+                for choice_id, (i, j, k) in enumerate(self.adj_data[global_id]):
+                    batch_adj[batch_id, choice_id, i, j, k] = 1
+
+            yield tuple([batch_qids, batch_labels, *batch_tensors0, *batch_lists0, *batch_tensors1, *batch_lists1, *batch_tensors2, *batch_lists2, batch_adj[:b - a]])
+
+    def _to_device(self, obj, device):
+        if isinstance(obj, (tuple, list)):
+            return [self._to_device(item, device) for item in obj]
+        else:
+            return obj.to(device)
 
 class MultiGPUAdjDataBatchGenerator(object):
     """
@@ -714,16 +770,15 @@ def load_bert_xlnet_roberta_input_tensors(statement_jsonl_path, model_type, mode
 
     return (example_ids, all_label, *data_tensors)
 
-
-def load_lstm_input_tensors(input_jsonl_path, max_seq_length, max_num_pervisit):
+def load_lstm_cui_input_tensors(input_jsonl_path, max_seq_length, max_num_pervisit):
     def _truncate_seq(tokens_a, max_length):
         while len(tokens_a) > max_length:
             tokens_a.pop()
-    with open("./data/semmed/entity2id.txt", "r", encoding="utf8") as fin:
-        id2cui = [c.strip().split("	")[0] for c in fin]
-    cui2id = {c: i for i, c in enumerate(id2cui)}
+    with open("./data/semmed/sub_cui_vocab.txt", 'r', encoding="utf-8") as fin:
+        id2cui = [c.strip() for c in fin]
+        cui2id = {c: i for i, c in enumerate(id2cui)}
     qids, labels, input_ids, input_lengths = [], [], [], []
-    pad_id = len(id2cui) # last id of embedding
+    pad_id = len(id2cui)  # last id of embedding
     pad_seq = []
     for i in range(max_num_pervisit):
         pad_seq.append(pad_id)
@@ -737,6 +792,48 @@ def load_lstm_input_tensors(input_jsonl_path, max_seq_length, max_num_pervisit):
                 visit_ids = []
                 for cui in visit:
                     id = cui2id[cui]
+                    visit_ids.append(id)
+                _truncate_seq(visit_ids, max_num_pervisit)
+                for i in range(0, (max_num_pervisit - len(visit_ids))):
+                    visit_ids.append(pad_id)
+                record_ids.append(visit_ids)
+            _truncate_seq(record_ids, max_seq_length)
+            input_lengths.append(len(record_ids))
+            for j in range(0, (max_seq_length - len(record_ids))):
+                record_ids.append(pad_seq)
+            input_ids.append(record_ids)
+    for l in labels:
+        assert l in [0, 1]
+    labels = torch.tensor(labels, dtype=torch.long)
+    # labels = labels.unsqueeze(1)
+    input_ids = torch.tensor(input_ids, dtype=torch.long)
+    input_ids = input_ids.unsqueeze(1)
+    input_lengths = torch.tensor(input_lengths, dtype=torch.long)
+    input_lengths = input_lengths.unsqueeze(1)
+    return qids, labels, input_ids, input_lengths
+
+def load_lstm_icd_input_tensors(input_jsonl_path, max_seq_length, max_num_pervisit):
+    def _truncate_seq(tokens_a, max_length):
+        while len(tokens_a) > max_length:
+            tokens_a.pop()
+    with open("./data/hfdata/hf_code2idx_new.pickle", "rb") as fin:
+        code2id = pickle.load(fin)
+    qids, labels, input_ids, input_lengths = [], [], [], []
+    pad_id = len(code2id) # last id of embedding
+    #print("num_icd: ", pad_id)
+    pad_seq = []
+    for i in range(max_num_pervisit):
+        pad_seq.append(pad_id)
+    with open(input_jsonl_path, "r", encoding="utf-8") as fin:
+        for line in fin:
+            input_json = json.loads(line)
+            qids.append(input_json['id'])
+            labels.append(input_json["heart_diseases"]["hf_label"])
+            record_ids = []
+            for visit in input_json["medical_records"]["record_icd"]:
+                visit_ids = []
+                for icd in visit:
+                    id = code2id[icd]
                     visit_ids.append(id)
                 _truncate_seq(visit_ids, max_num_pervisit)
                 for i in range(0, (max_num_pervisit-len(visit_ids))):
@@ -757,6 +854,14 @@ def load_lstm_input_tensors(input_jsonl_path, max_seq_length, max_num_pervisit):
     input_lengths = input_lengths.unsqueeze(1)
     return qids, labels, input_ids, input_lengths
 
+
+def load_lstm_input_tensors(input_jsonl_path, max_seq_length, max_num_pervisit):
+    return load_lstm_icd_input_tensors(input_jsonl_path, max_seq_length, max_num_pervisit)
+
+def load_lstm_multi_input_tensors(input_jsonl_path, max_seq_length, max_num_pervisit):
+    qids, labels, *encoder_data = load_lstm_cui_input_tensors(input_jsonl_path, max_seq_length, max_num_pervisit)
+    qids2, labels2, *encoder_data2 = load_lstm_icd_input_tensors(input_jsonl_path, max_seq_length, max_num_pervisit)
+    return qids, labels, encoder_data, encoder_data2
 
 def load_input_tensors(input_jsonl_path, model_type, model_name, max_seq_length, max_num_pervisit, format=[]):
     if model_type in ('lstm',):
