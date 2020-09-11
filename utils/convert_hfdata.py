@@ -154,6 +154,7 @@ def convert_to_cui(pickle_file, output_file, code2idx_path, snomedct_path, icd2s
         hf = pkl.load(fin)
     medical_records = hf[0]
     hf_labels = hf[1]
+
     nrow = len(hf_labels)
 
     # write the output file in jsonl format line by line

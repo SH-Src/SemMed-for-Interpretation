@@ -85,7 +85,7 @@ def add_encoder_arguments(parser):
     parser.add_argument('--encoder_freeze_emb', default=False, type=bool_flag, nargs='?', const=False, help='freeze lstm input embedding layer')
     parser.add_argument('--encoder_pooler', default='max', choices=['max', 'mean'], help='pooling function')
 
-    parser.add_argument('--encoder_dim1', default=128, type=int, help='number of LSTM hidden units')
+    parser.add_argument('--encoder_dim1', default=256, type=int, help='number of LSTM hidden units')
     parser.add_argument('--encoder_layer_num1', default=2, type=int, help='number of LSTM layers')
     parser.add_argument('--encoder_bidir1', default=True, type=bool_flag, nargs='?', const=True, help='use BiLSTM')
     parser.add_argument('--encoder_dropoute1', default=0.1, type=float, help='word dropout')
@@ -95,9 +95,14 @@ def add_encoder_arguments(parser):
                         help='path to pretrained emb in .npy format')
     parser.add_argument('--encoder_freeze_emb1', default=False, type=bool_flag, nargs='?', const=False,
                         help='freeze lstm input embedding layer')
-    parser.add_argument('--encoder_emb_size1', default=200, type=int, help='embedding size of input')
+    parser.add_argument('--encoder_emb_size1', default=300, type=int, help='embedding size of input')
     parser.add_argument('--encoder_pooler1', default='max', choices=['max', 'mean'], help='pooling function')
 
+    parser.add_argument('--dict_len', default=8692, type=int, help='dic size')
+    parser.add_argument('--lsan_emb_dim', default=128, type=int, help='embedding size of transformer')
+    parser.add_argument('--att_heads', default=8, type=int, help='Number of Transformer Heads')
+    parser.add_argument('--dropout', default=0.1, type=float)
+    parser.add_argument('--layers', default=3, type=int, help='Number of Layers of Transformer')
     args, _ = parser.parse_known_args()
     parser.set_defaults(encoder_lr=ENCODER_DEFAULT_LR[args.dataset].get(args.encoder, ENCODER_DEFAULT_LR['default']))
 
@@ -106,7 +111,7 @@ def add_optimization_arguments(parser):
     parser.add_argument('--loss', default='cross_entropy', choices=['margin_rank', 'BCE', 'cross_entropy'], help='model type')
     parser.add_argument('--optim', default='radam', choices=['sgd', 'adam', 'adamw', 'radam'], help='learning rate scheduler')
     parser.add_argument('--lr_schedule', default='fixed', choices=['fixed', 'warmup_linear', 'warmup_constant'], help='learning rate scheduler')
-    parser.add_argument('-bs', '--batch_size', default=32, type=int)
+    parser.add_argument('-bs', '--batch_size', default=64, type=int)
     parser.add_argument('--warmup_steps', type=float, default=150)
     parser.add_argument('--max_grad_norm', default=1.0, type=float, help='max grad norm (0 to disable)')
     parser.add_argument('--weight_decay', default=1e-2, type=float, help='l2 weight decay strength')
@@ -147,6 +152,17 @@ def get_lstm_config_from_args(args):
         'pretrained_emb_or_path': args.encoder_pretrained_emb1,
         'freeze_emb': args.encoder_freeze_emb1,
         'pool_function': args.encoder_pooler1,
+    }
+    return lstm_config
+
+def get_lsan_config_from_args(args):
+    lstm_config = {
+        'dict_len': args.dict_len,
+        'embedding_dim': args.lsan_emb_dim,
+        'transformer_hidden': args.lsan_emb_dim,
+        'attn_heads': args.att_heads,
+        'transformer_dropout': args.dropout,
+        'transformer_layers': args.layers
     }
     return lstm_config
 

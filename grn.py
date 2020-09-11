@@ -7,7 +7,7 @@ from modeling.modeling_grn import *
 from utils.optimization_utils import OPTIMIZER_CLASSES
 from utils.parser_utils import *
 from utils.relpath_utils import *
-from utils.semmed import relations
+from utils.semmed import relations_prune
 
 DECODER_DEFAULT_LR = {
     'csqa': 1e-3,
@@ -62,7 +62,7 @@ def main():
     parser.add_argument('--save_dir', default=f'./saved_models/grn/', help='model output directory')
 
     # data
-    parser.add_argument('--cpnet_vocab_path', default='./data/semmed/entity2id.txt')
+    parser.add_argument('--cpnet_vocab_path', default='./data/semmed/sub_cui_vocab.txt')
     parser.add_argument('--num_relation', default=18, type=int, help='number of relations')
     parser.add_argument('--train_adj', default=f'./data/{args.dataset}/graph/train.graph.adj.pk')
     parser.add_argument('--dev_adj', default=f'./data/{args.dataset}/graph/dev.graph.adj.pk')
@@ -400,10 +400,12 @@ def decode(args):
     model.to(device)
     model.eval()
 
-    statement_dic = {}
-    for statement_path in (old_args.train_statements, old_args.dev_statements, old_args.test_statements):
-        statement_dic.update(load_statement_dict(statement_path))
+    # statement_dic = {}
+    # for statement_path in (old_args.train_statements, old_args.dev_statements, old_args.test_statements):
+    #     statement_dic.update(load_statement_dict(statement_path))
 
+    statement_dic_dev = load_statement_dict(old_args.dev_statements)
+    statement_dic_test = load_statement_dict(old_args.test_statements)
     use_contextualized = 'lm' in old_args.ent_emb
     dataset = LMGraphRelationNetDataLoader(old_args.train_statements, old_args.train_adj,
                                            old_args.dev_statements, old_args.dev_adj,
@@ -426,40 +428,79 @@ def decode(args):
                 res.append(id2concept[path_ids[p].item()])
             else:  # relationi
                 rid = path_ids[p].item()
-                if rid < len(relations):
-                    res.append('<--[{}]---'.format(relations[rid]))
+                if rid < len(relations_prune):
+                    res.append('<--[{}]---'.format(relations_prune[rid]))
                 else:
-                    res.append('---[{}]--->'.format(relations[rid - len(relations)]))
+                    res.append('---[{}]--->'.format(relations_prune[rid - len(relations_prune)]))
         return ' '.join(res)
 
     print()
     print("***** decoding *****")
     print(f'| dataset: {old_args.dataset} | num_dev: {dataset.dev_size()} | num_test: {dataset.test_size()} | save_dir: {args.save_dir} |')
     model.eval()
-    for eval_set, filename in zip([dataset.dev(), dataset.test()], ['decode_dev.txt', 'decode_test.txt']):
-        outputs = []
-        with torch.no_grad():
-            for qids, labels, *input_data in tqdm(eval_set):
-                logits, path_ids, path_lengths = model.decode(*input_data)
-                predictions = logits.argmax(1)
-                for i, (qid, label, pred) in enumerate(zip(qids, labels, predictions)):
-                    outputs.append('*' * 60)
-                    outputs.append('id: {}'.format(qid))
-                    outputs.append('question: {}'.format(statement_dic[qid]['question']))
-                    outputs.append('answer: {}'.format(statement_dic[qid]['answers'][label.item()]))
-                    outputs.append('prediction: {}'.format(statement_dic[qid]['answers'][pred.item()]))
-                    for j, answer in enumerate(statement_dic[qid]['answers']):
-                        path = path_ids[i, j, :path_lengths[i, j]]
-                        outputs.append('{:25} {}'.format('[{}. {}]{}{}'.format(chr(ord('A') + j),
-                                                                               answer,
-                                                                               '*' if j == label else '',
-                                                                               '^' if j == pred else ''),
-                                                         path_ids_to_text(path)))
-        output_path = os.path.join(args.save_dir, filename)
-        with open(output_path, 'w') as fout:
-            for line in outputs:
-                fout.write(line + '\n')
-        print(f'outputs saved to {output_path}')
+
+    #for eval_set, filename in zip([dataset.dev(), dataset.test()], ['decode_dev.txt', 'decode_test.txt']):
+    outputs = []
+    with torch.no_grad():
+        for qids, labels, *input_data in tqdm(dataset.dev()):
+            logits, path_ids, path_lengths = model.decode(*input_data)
+            predictions = logits.argmax(1)
+            for i, (qid, label, pred) in enumerate(zip(qids, labels, predictions)):
+                outputs.append('*' * 60)
+                outputs.append('id: {}'.format(qid))
+                outputs.append('record_icd: {}'.format(statement_dic_dev[qid]['record_icd']))
+                outputs.append('record_cui: {}'.format(statement_dic_dev[qid]['record_cui']))
+                # print("qid: ", qid)
+                # print(str(statement_dic_dev[qid]['label']).strip())
+                # print(str(label.item()).strip())
+                assert str(statement_dic_dev[qid]['label']).strip() == str(label.item()).strip()
+                outputs.append('label: {}'.format(statement_dic_dev[qid]['label']))
+                outputs.append('prediction: {}'.format([pred.item()]))
+                # for j, answer in enumerate(statement_dic[qid]['labels']):
+                #     path = path_ids[i, j, :path_lengths[i, j]]
+                #     outputs.append('{:25} {}'.format('[{}. {}]{}{}'.format(chr(ord('A') + j),
+                #                                                            answer,
+                #                                                            '*' if j == label else '',
+                #                                                            '^' if j == pred else ''),
+                #                                      path_ids_to_text(path)))
+                path = path_ids[i, 0, :path_lengths[i, 0]]
+                outputs.append('path: {}'.format(path_ids_to_text(path)))
+    output_path = os.path.join(args.save_dir, 'decode_dev.txt')
+    with open(output_path, 'w') as fout:
+        for line in outputs:
+            fout.write(line + '\n')
+    print(f'outputs saved to {output_path}')
+
+    outputs = []
+    with torch.no_grad():
+        for qids, labels, *input_data in tqdm(dataset.test()):
+            logits, path_ids, path_lengths = model.decode(*input_data)
+            predictions = logits.argmax(1)
+            for i, (qid, label, pred) in enumerate(zip(qids, labels, predictions)):
+                outputs.append('*' * 60)
+                outputs.append('id: {}'.format(qid))
+                outputs.append('record_icd: {}'.format(statement_dic_test[qid]['record_icd']))
+                outputs.append('record_cui: {}'.format(statement_dic_test[qid]['record_cui']))
+                # print("qid: ", qid)
+                # print(str(statement_dic_test[qid]['label']).strip())
+                # print(str(label.item()).strip())
+                assert str(statement_dic_test[qid]['label']).strip() == str(label.item()).strip()
+                outputs.append('label: {}'.format(statement_dic_test[qid]['label']))
+                outputs.append('prediction: {}'.format([pred.item()]))
+                # for j, answer in enumerate(statement_dic[qid]['labels']):
+                #     path = path_ids[i, j, :path_lengths[i, j]]
+                #     outputs.append('{:25} {}'.format('[{}. {}]{}{}'.format(chr(ord('A') + j),
+                #                                                            answer,
+                #                                                            '*' if j == label else '',
+                #                                                            '^' if j == pred else ''),
+                #                                      path_ids_to_text(path)))
+                path = path_ids[i, 0, :path_lengths[i, 0]]
+                outputs.append('path: {}'.format(path_ids_to_text(path)))
+    output_path = os.path.join(args.save_dir, 'decode_test.txt')
+    with open(output_path, 'w') as fout:
+        for line in outputs:
+            fout.write(line + '\n')
+    print(f'outputs saved to {output_path}')
     print("***** done *****")
     print()
 

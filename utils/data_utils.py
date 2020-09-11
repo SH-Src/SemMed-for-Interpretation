@@ -844,8 +844,7 @@ def load_lstm_icd_input_tensors(input_jsonl_path, max_seq_length, max_num_pervis
             for j in range(0, (max_seq_length-len(record_ids))):
                 record_ids.append(pad_seq)
             input_ids.append(record_ids)
-    for l in labels:
-        assert l in [0, 1]
+
     labels = torch.tensor(labels, dtype=torch.long)
     #labels = labels.unsqueeze(1)
     input_ids = torch.tensor(input_ids, dtype=torch.long)
@@ -896,7 +895,8 @@ def load_statement_dict(statement_path):
             instance_dict = json.loads(line)
             qid = instance_dict['id']
             all_dict[qid] = {
-                'question': instance_dict['question']['stem'],
-                'answers': [dic['text'] for dic in instance_dict['question']['choices']]
+                'record_icd': instance_dict['medical_records']['record_icd'],
+                'record_cui': instance_dict['medical_records']['record_cui'],
+                'label': instance_dict['heart_diseases']['hf_label']
             }
     return all_dict
