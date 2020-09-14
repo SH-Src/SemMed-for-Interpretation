@@ -201,7 +201,7 @@ class MultiHopMessagePassingLayer(nn.Module):
             dp = F.one_hot(end_id, num_classes=n_node).float()  # (n_node,)
             assert 1 <= k <= self.k
             for t in range(k):
-                uni_at = uni_a[t, :]
+                uni_at = uni_a[-t, :]
 
                 if t == 0:
                     dp = dp.unsqueeze(0).expand(n_head, n_node)
@@ -232,7 +232,13 @@ class MultiHopMessagePassingLayer(nn.Module):
                 else:  # need to fill a relation id
                     path[p] = back_trace.pop(-1)[path[p - 2], path[p - 1]]
             assert len(back_trace) == 0
-            assert path[-1] == end_id
+            if path[-1] != end_id:
+                print('path: ', path)
+                print('end_id', end_id)
+                path_ids[idx, 0] = end_id
+                path_lengths[idx] = 1
+                continue
+            #assert path[-1] == end_id
             path_ids[idx, :2 * k + 1] = path
             path_lengths[idx] = 2 * k + 1
 
