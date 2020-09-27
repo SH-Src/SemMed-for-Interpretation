@@ -252,5 +252,5 @@ if __name__ == "__main__":
                                              "../data/semmed/database_pruned.graph",
                                              "../data/semmed/sub_cui_vocab.txt", "../data/hfdata/graph/test_graph_adj.pk")
     # extract_subgraph_cui("../data/hfdata/grounded/train_ground.jsonl", "../data/hfdata/grounded/dev_ground.jsonl",
-#     #                      "../data/hfdata/grounded/test_ground.jsonl", "../data/semmed/database_all.graph",
-#     #                      "../data/semmed/cui_vocab.txt", "../data/semmed/sub_cui_vocab.txt")
+    #                      "../data/hfdata/grounded/test_ground.jsonl", "../data/semmed/database_all.graph",
+    #                      "../data/semmed/cui_vocab.txt", "../data/semmed/sub_cui_vocab.txt")

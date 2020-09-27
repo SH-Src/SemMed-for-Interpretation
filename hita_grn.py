@@ -3,7 +3,7 @@ import random
 from tqdm import tqdm
 from transformers import (ConstantLRSchedule, WarmupLinearSchedule, WarmupConstantSchedule)
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-from modeling.modeling_grns import *
+from modeling.modeling_hita_grn import *
 from utils.optimization_utils import OPTIMIZER_CLASSES
 from utils.parser_utils import *
 from utils.relpath_utils import *
@@ -57,12 +57,11 @@ def eval_metric(eval_set, model):
         roc_auc = roc_auc_score(y_true, y_pred)
     return accuary, precision, recall, f1, roc_auc
 
-
 def main():
     parser = get_parser()
     args, _ = parser.parse_known_args()
     parser.add_argument('--mode', default='train', choices=['train', 'eval', 'pred', 'decode'], help='run training or evaluation')
-    parser.add_argument('--save_dir', default=f'./saved_models/grns/', help='model output directory')
+    parser.add_argument('--save_dir', default=f'./saved_models/hita_grn/', help='model output directory')
 
     # data
     parser.add_argument('--cpnet_vocab_path', default='./data/semmed/sub_cui_vocab.txt')
@@ -80,7 +79,7 @@ def main():
 
     # model architecture
     parser.add_argument('-k', '--k', default=2, type=int, help='perform k-hop message passing at each layer')
-    parser.add_argument('--ablation', default=['no_trans', 'q2a_only'], choices=['no_trans', 'early_relu', 'no_att', 'ctx_trans', 'q2a_only',
+    parser.add_argument('--ablation', default=['q2a_only'], choices=['no_trans', 'early_relu', 'no_att', 'ctx_trans', 'q2a_only',
                                                            'no_typed_transform', 'no_type_att', 'typed_pool', 'no_unary',
                                                            'detach_s_agg', 'detach_s_all', 'detach_s_pool', 'agg_self_loop',
                                                            'early_trans', 'pool_qc', 'pool_ac', 'pool_all',
@@ -181,7 +180,7 @@ def train(args):
         #   Build model                                                                                   #
         ###################################################################################################
 
-        lstm_config = get_lstm_config_from_args(args)
+        lstm_config = get_hita_config_from_args(args)
         model = LMGraphRelationNet(args.encoder, k=args.k, n_type=3, n_basis=args.num_basis, n_layer=args.gnn_layer_num,
                                    diag_decompose=args.diag_decompose, n_concept=concept_num,
                                    n_relation=args.num_relation, concept_dim=args.gnn_dim,
@@ -220,7 +219,17 @@ def train(args):
         max_steps = int(args.n_epochs * (dataset.train_size() / args.batch_size))
         scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=max_steps)
 
-    print('parameters:')
+
+    print('encoder parameters:')
+    for name, param in model.encoder.named_parameters():
+        if param.requires_grad:
+            print('\t{:45}\ttrainable\t{}'.format(name, param.size()))
+        else:
+            print('\t{:45}\tfixed\t{}'.format(name, param.size()))
+    num_params = sum(p.numel() for p in model.encoder.parameters() if p.requires_grad)
+    print('\ttotal:', num_params)
+
+    print('decoder parameters:')
     for name, param in model.decoder.named_parameters():
         if param.requires_grad:
             print('\t{:45}\ttrainable\t{}'.format(name, param.size()))

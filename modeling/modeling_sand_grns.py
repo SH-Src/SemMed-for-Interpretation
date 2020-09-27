@@ -1,4 +1,5 @@
 from modeling.modeling_encoder import TextEncoder, MODEL_NAME_TO_CLASS
+from modeling.transformer import SAND
 from utils.data_utils import *
 from utils.layers import *
 
@@ -696,8 +697,9 @@ class LMGraphRelationNet(nn.Module):
         super().__init__()
         self.ablation = ablation
         self.use_contextualized = use_contextualized
-        self.encoder = TextEncoder(model_name, **encoder_config)
-        self.decoder = GraphRelationNet(k, n_type, n_basis, n_layer, self.encoder.sent_dim, diag_decompose,
+        self.encoder = SAND(**encoder_config)
+        #self.decoder = MLP(256, fc_dim, 2, n_fc_layer, p_fc, layer_norm=True)
+        self.decoder = GraphRelationNet(k, n_type, n_basis, n_layer, 256, diag_decompose,
                                         n_concept, n_relation, concept_dim, concept_in_dim, n_attention_head,
                                         fc_dim, n_fc_layer, att_dim, att_layer_num, p_emb, p_gnn, p_fc,
                                         pretrained_concept_emb=pretrained_concept_emb, freeze_ent_emb=freeze_ent_emb,
@@ -731,12 +733,13 @@ class LMGraphRelationNet(nn.Module):
         else:
             *lm_inputs, concept_ids, node_type_ids, adj_lengths, emb_data, adj = inputs
         if 'no_lm' not in self.ablation:
-            sent_vecs, all_hidden_states = self.encoder(*lm_inputs, layer_id=layer_id)
+            sent_vecs = self.encoder(*lm_inputs)
         else:
             sent_vecs = torch.ones((bs * nc, self.encoder.sent_dim), dtype=torch.float)
         logits, attn = self.decoder(sent_vecs.to(concept_ids.device), concept_ids, node_type_ids, adj_lengths, adj,
                                     emb_data=emb_data, cache_output=cache_output)
         #logits = logits.view(bs, nc)
+        #logits = self.decoder(sent_vecs)
         logits = logits.view(bs, 2)
         return logits, attn
 
@@ -758,11 +761,13 @@ class LMGraphRelationNetDataLoader(object):
         self.use_contextualized = use_contextualized
 
         model_type = MODEL_NAME_TO_CLASS[model_name]
-        self.train_qids, self.train_labels, *self.train_encoder_data = load_input_tensors(train_statement_path, model_type, model_name, max_seq_length, max_num_pervisit, format=format)
-        self.dev_qids, self.dev_labels, *self.dev_encoder_data = load_input_tensors(dev_statement_path, model_type, model_name, max_seq_length, max_num_pervisit, format=format)
+        self.train_qids, self.train_labels, *self.train_encoder_data = load_sand_input(train_statement_path, max_seq_length, max_num_pervisit)
+        self.dev_qids, self.dev_labels, *self.dev_encoder_data = load_sand_input(dev_statement_path, max_seq_length, max_num_pervisit)
 
         num_choice = self.train_encoder_data[0].size(1)
-        #print("encoder data size: ", self.train_encoder_data[1])
+        # print("encoder data size: ", self.train_encoder_data[0].shape, self.train_encoder_data[1].shape)
+        # print(self.train_encoder_data[1])
+        # print('labels: ', str(self.train_labels.data.numpy().tolist()).count("0"))
         *self.train_decoder_data, self.train_adj_data, n_rel = load_adj_data(train_adj_path, max_node_num, num_choice, emb_pk_path=train_embs_path if use_contextualized else None)
         *self.dev_decoder_data, self.dev_adj_data, n_rel = load_adj_data(dev_adj_path, max_node_num, num_choice, emb_pk_path=dev_embs_path if use_contextualized else None)
         assert all(len(self.train_qids) == len(self.train_adj_data) == x.size(0) for x in [self.train_labels] + self.train_encoder_data + self.train_decoder_data)
@@ -773,7 +778,7 @@ class LMGraphRelationNetDataLoader(object):
         self.eval_adj_empty = torch.zeros((self.eval_batch_size, num_choice, n_rel - 1, max_node_num, max_node_num), dtype=torch.float32)
 
         if test_statement_path is not None:
-            self.test_qids, self.test_labels, *self.test_encoder_data = load_input_tensors(test_statement_path, model_type, model_name, max_seq_length, max_num_pervisit, format=format)
+            self.test_qids, self.test_labels, *self.test_encoder_data = load_sand_input(test_statement_path, max_seq_length, max_num_pervisit)
             *self.test_decoder_data, self.test_adj_data, n_rel = load_adj_data(test_adj_path, max_node_num, num_choice, emb_pk_path=test_embs_path if use_contextualized else None)
             assert all(len(self.test_qids) == len(self.test_adj_data) == x.size(0) for x in [self.test_labels] + self.test_encoder_data + self.test_decoder_data)
 
@@ -884,10 +889,3 @@ def run_test():
                     print(Zs)
                     raise
     print('***** all tests are passed *****')
-
-
-def reltest():
-    relattn = RelationAttention(2, 66, 50, 30)
-    S = torch.ones(64, 50)
-    uniatt = relattn(S)
-    print(uniatt[3][1, :].shape)

@@ -2,7 +2,7 @@ import json
 from tqdm import tqdm
 from semmed import relations_prune
 import networkx as nx
-import pickle
+
 cui2id = None
 id2cui = None
 relation2id = None
@@ -47,10 +47,11 @@ def search_nodes_of_2hop_all_pair(data):
     extra_nodes = extra_nodes - nodes
     hf_to_rm = set()
     for hf in hf_idxs:
-        if not extra_nodes & set(semmed_simple[hf]):
+        if not (extra_nodes | set(record_idxs)) & set(semmed_simple[hf]):
             hf_to_rm.add(hf)
     # all_nodes = record_idxs | hf_idxs | extra_nodes
     return hf_to_rm
+
 
 def ground(semmed_vocab_path, semmed_graph_path, hf_mapped_path, output_path):
     global cui2id, id2cui, relation2id, id2relation, semmed_simple, semmed
@@ -99,9 +100,8 @@ def ground(semmed_vocab_path, semmed_graph_path, hf_mapped_path, output_path):
 
 
 if __name__ == "__main__":
-    ground("../data/semmed/sub_cui_vocab.txt", "../data/semmed/database_pruned.graph",
-           "../data/hfdata/converted/dev.jsonl", "../data/hfdata/grounded/dev_ground1.jsonl")
-    ground("../data/semmed/sub_cui_vocab.txt", "../data/semmed/database_pruned.graph",
-           "../data/hfdata/converted/train.jsonl", "../data/hfdata/grounded/train_ground1.jsonl")
-    ground("../data/semmed/sub_cui_vocab.txt", "../data/semmed/database_pruned.graph",
-           "../data/hfdata/converted/test.jsonl", "../data/hfdata/grounded/test_ground1.jsonl")
+    ground("../data/semmed/cui_vocab.txt", "../data/semmed/database_all.graph", "../data/hfdata/converted/dev.jsonl", "../data/hfdata/grounded/dev_ground.jsonl")
+    ground("../data/semmed/cui_vocab.txt", "../data/semmed/database_all.graph", "../data/hfdata/converted/train.jsonl",
+           "../data/hfdata/grounded/train_ground.jsonl")
+    ground("../data/semmed/cui_vocab.txt", "../data/semmed/database_all.graph", "../data/hfdata/converted/test.jsonl",
+           "../data/hfdata/grounded/test_ground.jsonl")

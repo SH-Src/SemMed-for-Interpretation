@@ -38,10 +38,8 @@ from tqdm import tqdm
 __all__ = ['pickle2jsonl']
 
 
-hf_icd = ['398.91', '402.01', '402.11', '402.91', '404.01', '404.03', '404.11',
-          '404.13', '404.91', '404.93', '428', '428.0', '428.1', '428.2', '428.20',
-          '428.21', '428.22', '428.23', '428.3', '428.30', '428.31', '428.32',
-          '428.33', '428.4', '428.40', '428.41', '428.42', '428.43', '428.9']
+hf_icd = ['490', '491', '491.0', '491.1', '491.2', '491.20', '491.21', '491.22',
+        '491.8', '491.9', '492', '492.0', '492.8', '494', '494.0', '494.1', '496']
 
 
 def load_code2idx(code2idx_path: str) -> dict:
@@ -89,7 +87,7 @@ def map_icd2cui(snomedct_path: str, icd2snomed_1to1_path: str, icd2snomed_1toM_p
     return icd2cui, icd_list, cui_list
 
 
-def create_output_dict(row, medical_record, hf_label, icd_list, idx2code, icd2cui):
+def create_output_dict(row, medical_record, hf_label, icd_list, idx2code, icd2cui, time_dist):
     # TODO: deal with the record with no cui found, for example id=20
     """
     convert each line of the hf data into a dictionary
@@ -113,6 +111,7 @@ def create_output_dict(row, medical_record, hf_label, icd_list, idx2code, icd2cu
     # if there're over 50 visits, select the latest 50 ones
     if len(medical_record) > 50:
         medical_record = medical_record[-50:]
+        time_dist = time_dist[-50:]
 
     for visit in medical_record:
         visit_icd = []
@@ -133,7 +132,7 @@ def create_output_dict(row, medical_record, hf_label, icd_list, idx2code, icd2cu
     # hf_label is NumPy.int64 and json does not recognize NumPy data types
     hf_label = int(hf_label)
     output_dict["id"] = row
-    output_dict["medical_records"] = {"record_icd": record_icd, "record_cui": record_cui}
+    output_dict["medical_records"] = {"record_icd": record_icd, "time_distance": time_dist, "record_cui": record_cui}
     output_dict["heart_diseases"] = {"hf_icd": hf_icd, "hf_cui": hf_cui, "hf_label": hf_label}
     return output_dict
 
@@ -154,13 +153,14 @@ def convert_to_cui(pickle_file, output_file, code2idx_path, snomedct_path, icd2s
         hf = pkl.load(fin)
     medical_records = hf[0]
     hf_labels = hf[1]
+    time_dist = hf[2]
 
     nrow = len(hf_labels)
 
     # write the output file in jsonl format line by line
     with open(output_file, "w") as fout:
         for row in tqdm(range(nrow)):
-            output_dict = create_output_dict(row, medical_records[row], hf_labels[row], icd_list, idx2code, icd2cui)
+            output_dict = create_output_dict(row, medical_records[row], hf_labels[row], icd_list, idx2code, icd2cui, time_dist[row])
             fout.write(json.dumps(output_dict))
             fout.write("\n")
     print(f'converted data saved to {output_file}')
@@ -168,7 +168,14 @@ def convert_to_cui(pickle_file, output_file, code2idx_path, snomedct_path, icd2s
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 7:
-        raise ValueError("Provide six arguments")
-    convert_to_cui((sys.argv[1]), (sys.argv[2]), (sys.argv[3]),
-                   (sys.argv[4]), (sys.argv[5]), (sys.argv[6]))
+    convert_to_cui('../data/hfdata/hf_validation_new.pickle','../data/hfdata/converted/dev.jsonl','../data/hfdata/hf_code2idx_new.pickle',
+                   '../data/semmed/SNOMEDCT_CORE_SUBSET_202002.txt','../data/semmed/ICD9CM_SNOMED_MAP_1TO1_201912.txt',
+                   '../data/semmed/ICD9CM_SNOMED_MAP_1TOM_201912.txt')
+    convert_to_cui('../data/hfdata/hf_training_new.pickle', '../data/hfdata/converted/train.jsonl',
+                   '../data/hfdata/hf_code2idx_new.pickle',
+                   '../data/semmed/SNOMEDCT_CORE_SUBSET_202002.txt', '../data/semmed/ICD9CM_SNOMED_MAP_1TO1_201912.txt',
+                   '../data/semmed/ICD9CM_SNOMED_MAP_1TOM_201912.txt')
+    convert_to_cui('../data/hfdata/hf_testing_new.pickle', '../data/hfdata/converted/test.jsonl',
+                   '../data/hfdata/hf_code2idx_new.pickle',
+                   '../data/semmed/SNOMEDCT_CORE_SUBSET_202002.txt', '../data/semmed/ICD9CM_SNOMED_MAP_1TO1_201912.txt',
+                   '../data/semmed/ICD9CM_SNOMED_MAP_1TOM_201912.txt')

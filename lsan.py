@@ -39,19 +39,23 @@ def eval_metric(eval_set, model):
     with torch.no_grad():
         y_true = np.array([])
         y_pred = np.array([])
+        y_score = np.array([])
         for qids, labels, *input_data in eval_set:
             logits = model(*input_data)
             logits = logits.data.cpu().numpy()
             labels = labels.data.cpu().numpy()
-            logits = logits.argmax(1)
+            pred = logits.argmax(1)
+            score = logits[:, 1]
             y_true = np.concatenate((y_true, labels))
-            y_pred = np.concatenate((y_pred, logits))
+            y_pred = np.concatenate((y_pred, pred))
+            y_score = np.concatenate((y_score, score))
         accuary = accuracy_score(y_true, y_pred)
         precision = precision_score(y_true, y_pred)
         recall = recall_score(y_true, y_pred)
         f1 = f1_score(y_true, y_pred)
         roc_auc = roc_auc_score(y_true, y_pred)
     return accuary, precision, recall, f1, roc_auc
+
 
 
 def main():

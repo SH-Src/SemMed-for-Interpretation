@@ -3,7 +3,7 @@ import random
 from tqdm import tqdm
 from transformers import (ConstantLRSchedule, WarmupLinearSchedule, WarmupConstantSchedule)
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-from modeling.modeling_grns import *
+from modeling.modeling_sand_grn import *
 from utils.optimization_utils import OPTIMIZER_CLASSES
 from utils.parser_utils import *
 from utils.relpath_utils import *
@@ -21,7 +21,7 @@ def get_node_feature_encoder(encoder_name):
 
 
 def evaluate_accuracy(eval_set, model):
-    #n_samples, n_correct = 0, 0
+    # n_samples, n_correct = 0, 0
     model.eval()
     with torch.no_grad():
         y_true = np.array([])
@@ -34,6 +34,7 @@ def evaluate_accuracy(eval_set, model):
             y_true = np.concatenate((y_true, labels))
             y_pred = np.concatenate((y_pred, logits))
     return accuracy_score(y_true, y_pred)
+
 
 def eval_metric(eval_set, model):
     model.eval()
@@ -61,8 +62,9 @@ def eval_metric(eval_set, model):
 def main():
     parser = get_parser()
     args, _ = parser.parse_known_args()
-    parser.add_argument('--mode', default='train', choices=['train', 'eval', 'pred', 'decode'], help='run training or evaluation')
-    parser.add_argument('--save_dir', default=f'./saved_models/grns/', help='model output directory')
+    parser.add_argument('--mode', default='train', choices=['train', 'eval', 'pred', 'decode'],
+                        help='run training or evaluation')
+    parser.add_argument('--save_dir', default=f'./saved_models/sand_grn/', help='model output directory')
 
     # data
     parser.add_argument('--cpnet_vocab_path', default='./data/semmed/sub_cui_vocab.txt')
@@ -80,13 +82,15 @@ def main():
 
     # model architecture
     parser.add_argument('-k', '--k', default=2, type=int, help='perform k-hop message passing at each layer')
-    parser.add_argument('--ablation', default=['no_trans', 'q2a_only'], choices=['no_trans', 'early_relu', 'no_att', 'ctx_trans', 'q2a_only',
-                                                           'no_typed_transform', 'no_type_att', 'typed_pool', 'no_unary',
-                                                           'detach_s_agg', 'detach_s_all', 'detach_s_pool', 'agg_self_loop',
-                                                           'early_trans', 'pool_qc', 'pool_ac', 'pool_all',
-                                                           'no_ent', 'no_rel', 'no_rel_att', 'no_1hop', 'fix_scale',
-                                                           'no_lm'], nargs='*', help='run ablation test')
-    parser.add_argument('-dd', '--diag_decompose', default=True, type=bool_flag, nargs='?', const=True, help='use diagonal decomposition')
+    parser.add_argument('--ablation', default=['q2a_only'],
+                        choices=['no_trans', 'early_relu', 'no_att', 'ctx_trans', 'q2a_only',
+                                 'no_typed_transform', 'no_type_att', 'typed_pool', 'no_unary',
+                                 'detach_s_agg', 'detach_s_all', 'detach_s_pool', 'agg_self_loop',
+                                 'early_trans', 'pool_qc', 'pool_ac', 'pool_all',
+                                 'no_ent', 'no_rel', 'no_rel_att', 'no_1hop', 'fix_scale',
+                                 'no_lm'], nargs='*', help='run ablation test')
+    parser.add_argument('-dd', '--diag_decompose', default=True, type=bool_flag, nargs='?', const=True,
+                        help='use diagonal decomposition')
     parser.add_argument('--num_basis', default=0, type=int, help='number of basis (0 to disable basis decomposition)')
     parser.add_argument('--att_head_num', default=2, type=int, help='number of attention heads')
     parser.add_argument('--att_dim', default=50, type=int, help='dimensionality of the query vectors')
@@ -95,9 +99,11 @@ def main():
     parser.add_argument('--gnn_layer_num', default=1, type=int, help='number of GNN layers')
     parser.add_argument('--fc_dim', default=200, type=int, help='number of FC hidden units')
     parser.add_argument('--fc_layer_num', default=0, type=int, help='number of FC layers')
-    parser.add_argument('--freeze_ent_emb', default=False, type=bool_flag, nargs='?', const=False, help='freeze entity embedding layer')
+    parser.add_argument('--freeze_ent_emb', default=False, type=bool_flag, nargs='?', const=False,
+                        help='freeze entity embedding layer')
     parser.add_argument('--eps', type=float, default=1e-15, help='avoid numeric overflow')
-    parser.add_argument('--init_range', default=0.02, type=float, help='stddev when initializing with normal distribution')
+    parser.add_argument('--init_range', default=0.02, type=float,
+                        help='stddev when initializing with normal distribution')
     parser.add_argument('--init_rn', default=True, type=bool_flag, nargs='?', const=True)
     parser.add_argument('--init_identity', default=True, type=bool_flag, nargs='?', const=True)
     parser.add_argument('--max_node_num', default=200, type=int)
@@ -111,13 +117,15 @@ def main():
     parser.add_argument('--dropoutf', type=float, default=0.2, help='dropout for fully-connected layers')
 
     # optimization
-    parser.add_argument('-dlr', '--decoder_lr', default=DECODER_DEFAULT_LR[args.dataset], type=float, help='learning rate')
+    parser.add_argument('-dlr', '--decoder_lr', default=DECODER_DEFAULT_LR[args.dataset], type=float,
+                        help='learning rate')
     parser.add_argument('-mbs', '--mini_batch_size', default=32, type=int)
     parser.add_argument('-ebs', '--eval_batch_size', default=32, type=int)
     parser.add_argument('--unfreeze_epoch', default=3, type=int)
     parser.add_argument('--refreeze_epoch', default=10000, type=int)
 
-    parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS, help='show this help message and exit')
+    parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS,
+                        help='show this help message and exit')
     args = parser.parse_args()
     if args.simple:
         parser.set_defaults(diag_decompose=True, gnn_layer_num=1, k=1)
@@ -165,50 +173,60 @@ def train(args):
     concept_num, concept_dim = cp_emb.size(0), cp_emb.size(1)
     print('| num_concepts: {} |'.format(concept_num))
 
-    try:
-        device = torch.device("cuda:0" if torch.cuda.is_available() and args.cuda else "cpu")
-        dataset = LMGraphRelationNetDataLoader(args.train_statements, args.train_adj,
-                                               args.dev_statements, args.dev_adj,
-                                               args.test_statements, args.test_adj,
-                                               batch_size=args.batch_size, eval_batch_size=args.eval_batch_size, device=(device, device),
-                                               model_name=args.encoder,
-                                               max_node_num=args.max_node_num, max_seq_length=args.max_seq_len,
-                                               is_inhouse=args.inhouse, inhouse_train_qids_path=args.inhouse_train_qids, use_contextualized=use_contextualized,
-                                               train_embs_path=args.train_embs, dev_embs_path=args.dev_embs, test_embs_path=args.test_embs,
-                                               subsample=args.subsample, format=args.format)
+    # try:
+    # except RuntimeError as e:
+    #     print(e)
+    #     print('best dev acc: 0.0 (at epoch 0)')
+    #     print('final test acc: 0.0')
+    #     print()
+    #     return
 
-        ###################################################################################################
-        #   Build model                                                                                   #
-        ###################################################################################################
+    device = torch.device("cuda:0" if torch.cuda.is_available() and args.cuda else "cpu")
+    dataset = LMGraphRelationNetDataLoader(args.train_statements, args.train_adj,
+                                           args.dev_statements, args.dev_adj,
+                                           args.test_statements, args.test_adj,
+                                           batch_size=args.batch_size, eval_batch_size=args.eval_batch_size,
+                                           device=(device, device),
+                                           model_name=args.encoder,
+                                           max_node_num=args.max_node_num, max_seq_length=args.max_seq_len,
+                                           is_inhouse=args.inhouse, inhouse_train_qids_path=args.inhouse_train_qids,
+                                           use_contextualized=use_contextualized,
+                                           train_embs_path=args.train_embs, dev_embs_path=args.dev_embs,
+                                           test_embs_path=args.test_embs,
+                                           subsample=args.subsample, format=args.format)
 
-        lstm_config = get_lstm_config_from_args(args)
-        model = LMGraphRelationNet(args.encoder, k=args.k, n_type=3, n_basis=args.num_basis, n_layer=args.gnn_layer_num,
-                                   diag_decompose=args.diag_decompose, n_concept=concept_num,
-                                   n_relation=args.num_relation, concept_dim=args.gnn_dim,
-                                   concept_in_dim=(dataset.get_node_feature_dim() if use_contextualized else concept_dim),
-                                   n_attention_head=args.att_head_num, fc_dim=args.fc_dim, n_fc_layer=args.fc_layer_num,
-                                   att_dim=args.att_dim, att_layer_num=args.att_layer_num,
-                                   p_emb=args.dropouti, p_gnn=args.dropoutg, p_fc=args.dropoutf,
-                                   pretrained_concept_emb=cp_emb, freeze_ent_emb=args.freeze_ent_emb,
-                                   ablation=args.ablation, init_range=args.init_range,
-                                   eps=args.eps, use_contextualized=use_contextualized,
-                                   do_init_rn=args.init_rn, do_init_identity=args.init_identity, encoder_config=lstm_config)
-        model.to(device)
-    except RuntimeError as e:
-        print(e)
-        print('best dev acc: 0.0 (at epoch 0)')
-        print('final test acc: 0.0')
-        print()
-        return
+    ###################################################################################################
+    #   Build model                                                                                   #
+    ###################################################################################################
+
+    lstm_config = get_sand_config(args)
+    model = LMGraphRelationNet(args.encoder, k=args.k, n_type=3, n_basis=args.num_basis, n_layer=args.gnn_layer_num,
+                               diag_decompose=args.diag_decompose, n_concept=concept_num,
+                               n_relation=args.num_relation, concept_dim=args.gnn_dim,
+                               concept_in_dim=(
+                                   dataset.get_node_feature_dim() if use_contextualized else concept_dim),
+                               n_attention_head=args.att_head_num, fc_dim=args.fc_dim, n_fc_layer=args.fc_layer_num,
+                               att_dim=args.att_dim, att_layer_num=args.att_layer_num,
+                               p_emb=args.dropouti, p_gnn=args.dropoutg, p_fc=args.dropoutf,
+                               pretrained_concept_emb=cp_emb, freeze_ent_emb=args.freeze_ent_emb,
+                               ablation=args.ablation, init_range=args.init_range,
+                               eps=args.eps, use_contextualized=use_contextualized,
+                               do_init_rn=args.init_rn, do_init_identity=args.init_identity,
+                               encoder_config=lstm_config)
+    model.to(device)
 
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     if args.fix_trans:
         no_decay.append('trans_scores')
     grouped_parameters = [
-        {'params': [p for n, p in model.encoder.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay, 'lr': args.encoder_lr},
-        {'params': [p for n, p in model.encoder.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0, 'lr': args.encoder_lr},
-        {'params': [p for n, p in model.decoder.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay, 'lr': args.decoder_lr},
-        {'params': [p for n, p in model.decoder.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0, 'lr': args.decoder_lr},
+        {'params': [p for n, p in model.encoder.named_parameters() if not any(nd in n for nd in no_decay)],
+         'weight_decay': args.weight_decay, 'lr': args.encoder_lr},
+        {'params': [p for n, p in model.encoder.named_parameters() if any(nd in n for nd in no_decay)],
+         'weight_decay': 0.0, 'lr': args.encoder_lr},
+        {'params': [p for n, p in model.decoder.named_parameters() if not any(nd in n for nd in no_decay)],
+         'weight_decay': args.weight_decay, 'lr': args.decoder_lr},
+        {'params': [p for n, p in model.decoder.named_parameters() if any(nd in n for nd in no_decay)],
+         'weight_decay': 0.0, 'lr': args.decoder_lr},
     ]
     optimizer = OPTIMIZER_CLASSES[args.optim](grouped_parameters)
 
@@ -220,7 +238,16 @@ def train(args):
         max_steps = int(args.n_epochs * (dataset.train_size() / args.batch_size))
         scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=max_steps)
 
-    print('parameters:')
+    print('encoder parameters:')
+    for name, param in model.encoder.named_parameters():
+        if param.requires_grad:
+            print('\t{:45}\ttrainable\t{}'.format(name, param.size()))
+        else:
+            print('\t{:45}\tfixed\t{}'.format(name, param.size()))
+    num_params = sum(p.numel() for p in model.encoder.parameters() if p.requires_grad)
+    print('\ttotal:', num_params)
+
+    print('decoder parameters:')
     for name, param in model.decoder.named_parameters():
         if param.requires_grad:
             print('\t{:45}\ttrainable\t{}'.format(name, param.size()))
@@ -246,7 +273,7 @@ def train(args):
     best_dev_auc, final_test_auc, total_loss = 0.0, 0.0, 0.0
     start_time = time.time()
     model.train()
-    #freeze_net(model.encoder)
+    # freeze_net(model.encoder)
     for epoch_id in range(args.n_epochs):
         print('epoch: {:5} '.format(epoch_id))
         # if epoch_id == args.unfreeze_epoch:
@@ -296,39 +323,37 @@ def train(args):
             global_step += 1
 
         model.eval()
-        train_acc, tr_precision, tr_recall, tr_f1, tr_roc_auc = eval_metric(dataset.train(), model)
+        # train_acc, tr_precision, tr_recall, tr_f1, tr_roc_auc = eval_metric(dataset.train(), model)
         dev_acc, d_precision, d_recall, d_f1, d_roc_auc = eval_metric(dataset.dev(), model)
         test_acc, t_precision, t_recall, t_f1, t_roc_auc = eval_metric(dataset.test(), model)
-        if (global_step) % args.log_interval == 0:
+        if global_step % args.log_interval == 0:
             tl = total_loss
         else:
             tl = total_loss / (global_step % args.log_interval)
         print('-' * 71)
-        print('| step {:5} | train_acc {:7.4f} | dev_acc {:7.4f} | test_acc {:7.4f} | loss {:7.4f} '.format(global_step, train_acc, dev_acc, test_acc,
+        print('| step {:5} | dev_acc {:7.4f} | test_acc {:7.4f} | loss {:7.4f} '.format(global_step,
+                                                                                        dev_acc,
+                                                                                        test_acc,
                                                                                         tl))
         print(
-            '| step {:5} | train_precision {:7.4f} | dev_precision {:7.4f} | test_precision {:7.4f} | loss {:7.4f} '.format(
+            '| step {:5} | dev_precision {:7.4f} | test_precision {:7.4f} | loss {:7.4f} '.format(
                 global_step,
-                tr_precision,
                 d_precision,
                 t_precision,
                 tl))
-        print('| step {:5} | train_recall {:7.4f} | dev_recall {:7.4f} | test_recall {:7.4f} | loss {:7.4f} '.format(
+        print('| step {:5} | dev_recall {:7.4f} | test_recall {:7.4f} | loss {:7.4f} '.format(
             global_step,
-            tr_recall,
             d_recall,
             t_recall,
             tl))
-        print('| step {:5} | train_f1 {:7.4f} | dev_f1 {:7.4f} | test_f1 {:7.4f} | loss {:7.4f} '.format(global_step,
-                                                                                                         tr_f1,
-                                                                                                         d_f1,
-                                                                                                         t_f1,
-                                                                                                         tl))
-        print('| step {:5} | train_auc {:7.4f} | dev_auc {:7.4f} | test_auc {:7.4f} | loss {:7.4f} '.format(global_step,
-                                                                                                            tr_roc_auc,
-                                                                                                            d_roc_auc,
-                                                                                                            t_roc_auc,
-                                                                                                            tl))
+        print('| step {:5} | dev_f1 {:7.4f} | test_f1 {:7.4f} | loss {:7.4f} '.format(global_step,
+                                                                                      d_f1,
+                                                                                      t_f1,
+                                                                                      tl))
+        print('| step {:5} | dev_auc {:7.4f} | test_auc {:7.4f} | loss {:7.4f} '.format(global_step,
+                                                                                        d_roc_auc,
+                                                                                        t_roc_auc,
+                                                                                        tl))
         print('-' * 71)
         with open(log_path, 'a') as fout:
             fout.write('{},{},{}\n'.format(global_step, d_roc_auc, t_roc_auc))
@@ -367,16 +392,21 @@ def eval(args):
     dataset = LMGraphRelationNetDataLoader(old_args.train_statements, old_args.train_adj,
                                            old_args.dev_statements, old_args.dev_adj,
                                            old_args.test_statements, old_args.test_adj,
-                                           batch_size=args.batch_size, eval_batch_size=args.eval_batch_size, device=(device, device),
+                                           batch_size=args.batch_size, eval_batch_size=args.eval_batch_size,
+                                           device=(device, device),
                                            model_name=old_args.encoder,
                                            max_node_num=old_args.max_node_num, max_seq_length=old_args.max_seq_len,
-                                           is_inhouse=old_args.inhouse, inhouse_train_qids_path=old_args.inhouse_train_qids, use_contextualized=use_contextualized,
-                                           train_embs_path=old_args.train_embs, dev_embs_path=old_args.dev_embs, test_embs_path=old_args.test_embs,
+                                           is_inhouse=old_args.inhouse,
+                                           inhouse_train_qids_path=old_args.inhouse_train_qids,
+                                           use_contextualized=use_contextualized,
+                                           train_embs_path=old_args.train_embs, dev_embs_path=old_args.dev_embs,
+                                           test_embs_path=old_args.test_embs,
                                            subsample=old_args.subsample, format=old_args.format)
 
     print()
     print("***** runing evaluation *****")
-    print(f'| dataset: {old_args.dataset} | num_dev: {dataset.dev_size()} | num_test: {dataset.test_size()} | save_dir: {args.save_dir} |')
+    print(
+        f'| dataset: {old_args.dataset} | num_dev: {dataset.dev_size()} | num_test: {dataset.test_size()} | save_dir: {args.save_dir} |')
     dev_acc = evaluate_accuracy(dataset.dev(), model)
     test_acc = evaluate_accuracy(dataset.test(), model) if dataset.test_size() else 0.0
     d_accuary, d_precision, d_recall, d_f1, d_roc_auc = eval_metric(dataset.dev(), model)
@@ -389,7 +419,6 @@ def eval(args):
     print(f'| dev_recall: {d_recall} | test_recall: {t_recall} |')
     print(f'| dev_f1: {d_f1} | test_f1: {t_f1} |')
     print(f'| dev_roc_auc: {d_roc_auc} | test_roc_auc: {t_roc_auc} |')
-
 
 
 def pred(args):
@@ -413,11 +442,15 @@ def decode(args):
     dataset = LMGraphRelationNetDataLoader(old_args.train_statements, old_args.train_adj,
                                            old_args.dev_statements, old_args.dev_adj,
                                            old_args.test_statements, old_args.test_adj,
-                                           batch_size=args.batch_size, eval_batch_size=args.eval_batch_size, device=(device, device),
+                                           batch_size=args.batch_size, eval_batch_size=args.eval_batch_size,
+                                           device=(device, device),
                                            model_name=old_args.encoder,
                                            max_node_num=old_args.max_node_num, max_seq_length=old_args.max_seq_len,
-                                           is_inhouse=old_args.inhouse, inhouse_train_qids_path=old_args.inhouse_train_qids, use_contextualized=use_contextualized,
-                                           train_embs_path=old_args.train_embs, dev_embs_path=old_args.dev_embs, test_embs_path=old_args.test_embs,
+                                           is_inhouse=old_args.inhouse,
+                                           inhouse_train_qids_path=old_args.inhouse_train_qids,
+                                           use_contextualized=use_contextualized,
+                                           train_embs_path=old_args.train_embs, dev_embs_path=old_args.dev_embs,
+                                           test_embs_path=old_args.test_embs,
                                            subsample=old_args.subsample, format=old_args.format)
 
     with open(args.cpnet_vocab_path, 'r', encoding='utf-8') as fin:
@@ -439,10 +472,11 @@ def decode(args):
 
     print()
     print("***** decoding *****")
-    print(f'| dataset: {old_args.dataset} | num_dev: {dataset.dev_size()} | num_test: {dataset.test_size()} | save_dir: {args.save_dir} |')
+    print(
+        f'| dataset: {old_args.dataset} | num_dev: {dataset.dev_size()} | num_test: {dataset.test_size()} | save_dir: {args.save_dir} |')
     model.eval()
 
-    #for eval_set, filename in zip([dataset.dev(), dataset.test()], ['decode_dev.txt', 'decode_test.txt']):
+    # for eval_set, filename in zip([dataset.dev(), dataset.test()], ['decode_dev.txt', 'decode_test.txt']):
     outputs = []
     with torch.no_grad():
         for qids, labels, *input_data in tqdm(dataset.dev()):

@@ -3,7 +3,7 @@ import random
 from tqdm import tqdm
 from transformers import (ConstantLRSchedule, WarmupLinearSchedule, WarmupConstantSchedule)
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-from modeling.modeling_grns import *
+from modeling.modeling_hita_grns import *
 from utils.optimization_utils import OPTIMIZER_CLASSES
 from utils.parser_utils import *
 from utils.relpath_utils import *
@@ -62,7 +62,7 @@ def main():
     parser = get_parser()
     args, _ = parser.parse_known_args()
     parser.add_argument('--mode', default='train', choices=['train', 'eval', 'pred', 'decode'], help='run training or evaluation')
-    parser.add_argument('--save_dir', default=f'./saved_models/grns/', help='model output directory')
+    parser.add_argument('--save_dir', default=f'./saved_models/hita_grns/', help='model output directory')
 
     # data
     parser.add_argument('--cpnet_vocab_path', default='./data/semmed/sub_cui_vocab.txt')
@@ -181,7 +181,7 @@ def train(args):
         #   Build model                                                                                   #
         ###################################################################################################
 
-        lstm_config = get_lstm_config_from_args(args)
+        lstm_config = get_hita_config_from_args(args)
         model = LMGraphRelationNet(args.encoder, k=args.k, n_type=3, n_basis=args.num_basis, n_layer=args.gnn_layer_num,
                                    diag_decompose=args.diag_decompose, n_concept=concept_num,
                                    n_relation=args.num_relation, concept_dim=args.gnn_dim,
@@ -220,7 +220,16 @@ def train(args):
         max_steps = int(args.n_epochs * (dataset.train_size() / args.batch_size))
         scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=max_steps)
 
-    print('parameters:')
+    print('encoder parameters:')
+    for name, param in model.encoder.named_parameters():
+        if param.requires_grad:
+            print('\t{:45}\ttrainable\t{}'.format(name, param.size()))
+        else:
+            print('\t{:45}\tfixed\t{}'.format(name, param.size()))
+    num_params = sum(p.numel() for p in model.encoder.parameters() if p.requires_grad)
+    print('\ttotal:', num_params)
+
+    print('decoder parameters:')
     for name, param in model.decoder.named_parameters():
         if param.requires_grad:
             print('\t{:45}\ttrainable\t{}'.format(name, param.size()))

@@ -1,4 +1,4 @@
-from .transformer import *
+from .transformer_lsan import *
 import torch.nn as nn
 import torch
 from torch.autograd import Function

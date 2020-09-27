@@ -1,4 +1,5 @@
 from modeling.modeling_encoder import TextEncoder, MODEL_NAME_TO_CLASS
+from modeling.transformer import SAND
 from utils.data_utils import *
 from utils.layers import *
 
@@ -177,7 +178,7 @@ class MultiHopMessagePassingLayer(nn.Module):
         A: tensor of shape (batch_size, n_head, n_node, n_node)
         start_attn: tensor of shape (batch_size, n_node)
         end_attn: tensor of shape (batch_size, n_node)
-        uni_attn: tensor of shape (batch_size, k, n_head)
+        uni_attn: tensor of shape (batch_size, n_head)
         trans_attn: tensor of shape (batch_size, n_head, n_head)
 
         returns: list[tensor of shape (path_len,)]
@@ -201,8 +202,6 @@ class MultiHopMessagePassingLayer(nn.Module):
             dp = F.one_hot(end_id, num_classes=n_node).float()  # (n_node,)
             assert 1 <= k <= self.k
             for t in range(k):
-                uni_at = uni_a[k-1-t, :]
-
                 if t == 0:
                     dp = dp.unsqueeze(0).expand(n_head, n_node)
                 else:
@@ -212,8 +211,7 @@ class MultiHopMessagePassingLayer(nn.Module):
                 dp = dp.unsqueeze(-1) * adj  # (n_head, n_node, n_node)
                 dp, ptr = dp.max(1)
                 back_trace.append(ptr)  # (n_head, n_node)
-
-                dp = dp * uni_at.unsqueeze(-1)  # (n_head, n_node)
+                dp = dp * uni_a.unsqueeze(-1)  # (n_head, n_node)
             dp, ptr = dp.max(0)
             back_trace.append(ptr)  # (n_node,)
             dp = dp * start_a
@@ -250,7 +248,7 @@ class MultiHopMessagePassingLayer(nn.Module):
         A: tensor of shape (batch_size, n_head, n_node, n_node)
         start_attn: tensor of shape (batch_size, n_node)
         end_attn: tensor of shape (batch_size, n_node)
-        uni_attn: tensor of shape (batch_size, k, n_head)
+        uni_attn: tensor of shape (batch_size, n_head)
         trans_attn: tensor of shape (batch_size, n_head, n_head)
         """
         k, n_head = self.k, self.n_head
@@ -259,13 +257,11 @@ class MultiHopMessagePassingLayer(nn.Module):
         W, W_pad = self._get_weights()  # (k, h_size, n_head) or (k, n_head, h_size h_size)
 
         A = A.view(bs * n_head, n_node, n_node)
-        #uni_attn = uni_attn.view(bs * n_head)
+        uni_attn = uni_attn.view(bs * n_head)
 
         Z_all = []
         Z = X * start_attn.unsqueeze(2)  # (bs, n_node, h_size)
         for t in range(k):
-            uni_attnt = uni_attn[:, t, :].contiguous().view(bs * n_head)
-
             if t == 0:  # Z.size() == (bs, n_node, h_size)
                 Z = Z.unsqueeze(-1).expand(bs, n_node, h_size, n_head)
             else:  # Z.size() == (bs, n_head, n_node, h_size)
@@ -278,8 +274,7 @@ class MultiHopMessagePassingLayer(nn.Module):
                 Z = Z.permute(3, 0, 1, 2).view(n_head, bs * n_node, h_size)
                 Z = Z.bmm(W[t]).view(n_head, bs, n_node, h_size)
                 Z = Z.permute(1, 0, 2, 3).contiguous().view(bs * n_head, n_node, h_size)
-
-            Z = Z * uni_attnt[:, None, None]
+            Z = Z * uni_attn[:, None, None]
             Z = A.bmm(Z)
             Z = Z.view(bs, n_head, n_node, h_size)
             Zt = Z.sum(1) * W_pad[t] if self.diag_decompose else Z.sum(1).matmul(W_pad[t])
@@ -290,16 +285,13 @@ class MultiHopMessagePassingLayer(nn.Module):
         D_all = []
         D = start_attn
         for t in range(k):
-            uni_attnt = uni_attn[:, t, :].contiguous().view(bs * n_head)
-
             if t == 0:  # D.size() == (bs, n_node)
                 D = D.unsqueeze(1).expand(bs, n_head, n_node)
             else:  # D.size() == (bs, n_head, n_node)
                 D = D.permute(0, 2, 1).bmm(trans_attn)  # (bs, n_node, n_head)
                 D = D.permute(0, 2, 1)
             D = D.contiguous().view(bs * n_head, n_node, 1)
-
-            D = D * uni_attnt[:, None, None]
+            D = D * uni_attn[:, None, None]
             D = A.bmm(D)
             D = D.view(bs, n_head, n_node)
             Dt = D.sum(1) * end_attn
@@ -312,30 +304,9 @@ class MultiHopMessagePassingLayer(nn.Module):
         return Z_all
 
 
-class RelationAttention(nn.Module):
-    def __init__(self, k, n_head, sent_dim, att_dim):
-        super().__init__()
-        self.hopTrans = nn.Parameter(torch.randn((k, att_dim, sent_dim)))
-        self.linear = nn.Linear(att_dim, n_head)
-        self.activation = nn.Sequential(nn.ReLU(), nn.Softmax(2))
-    def forward(self, S):
-        """
-        S: tensor of shape (batch_size, d_sent)
-        """
-        seq = S.matmul(self.hopTrans.permute(0, 2, 1)).permute(1, 0, 2) #(bs, k, att_dim)
-        #print(seq.shape)
-        d_k = seq.size(-1)
-        attention = seq.bmm(seq.transpose(-2, -1)) / math.sqrt(d_k)
-        p_attn = F.softmax(attention, dim=-1)
-        context = p_attn.bmm(seq)
-        out = self.linear(context)
-        return self.activation(out)
-
-
 class PathAttentionLayer(nn.Module):
-    def __init__(self, k, n_type, n_head, sent_dim, att_dim, att_layer_num, dropout=0.1, ablation=[]):
+    def __init__(self, n_type, n_head, sent_dim, att_dim, att_layer_num, dropout=0.1, ablation=[]):
         super().__init__()
-        self.k = k
         self.n_head = n_head
         self.ablation = ablation
         if 'no_att' not in self.ablation:
@@ -344,7 +315,7 @@ class PathAttentionLayer(nn.Module):
                 self.end_attention = MLP(sent_dim, att_dim, n_type, att_layer_num, dropout, layer_norm=True)
 
             if 'no_unary' not in self.ablation and 'no_rel_att' not in self.ablation:
-                self.path_uni_attention = RelationAttention(k, n_head, sent_dim, att_dim)
+                self.path_uni_attention = MLP(sent_dim, att_dim, n_head, att_layer_num, dropout, layer_norm=True)
 
             if 'no_trans' not in self.ablation and 'no_rel_att' not in self.ablation:
                 if 'ctx_trans' in self.ablation:
@@ -358,7 +329,6 @@ class PathAttentionLayer(nn.Module):
 
         returns: tensors of shapes (batch_size, n_node) (batch_size, n_node) (batch_size, n_head) (batch_size, n_head, n_head)
         """
-        k = self.k
         n_head = self.n_head
         bs, n_node = node_type.size()
 
@@ -384,10 +354,10 @@ class PathAttentionLayer(nn.Module):
             end_attn = torch.ones((bs, n_node), device=S.device)
 
         if 'no_att' not in self.ablation and 'no_unary' not in self.ablation and 'no_rel_att' not in self.ablation:
-            uni_attn = self.path_uni_attention(S).view(bs, k, n_head)  # (bs, n_head)
-            #uni_attn = torch.exp(uni_attn - uni_attn.max(2, keepdim=True)[0]).view(bs, k, n_head)
+            uni_attn = self.path_uni_attention(S).view(bs, n_head)  # (bs, n_head)
+            uni_attn = torch.exp(uni_attn - uni_attn.max(1, keepdim=True)[0]).view(bs, n_head)
         else:
-            uni_attn = torch.ones((bs, k, n_head), device=S.device)
+            uni_attn = torch.ones((bs, n_head), device=S.device)
 
         if 'no_att' not in self.ablation and 'no_trans' not in self.ablation and 'no_rel_att' not in self.ablation:
             if 'ctx_trans' in self.ablation:
@@ -444,7 +414,7 @@ class GraphRelationLayer(nn.Module):
         else:
             assert input_size == hidden_size
 
-        self.path_attention = PathAttentionLayer(k, n_type, n_head, sent_dim, att_dim, att_layer_num, dropout, ablation=ablation)
+        self.path_attention = PathAttentionLayer(n_type, n_head, sent_dim, att_dim, att_layer_num, dropout, ablation=ablation)
         self.message_passing = MultiHopMessagePassingLayer(k, n_head, hidden_size, diag_decompose, n_basis, eps=eps, ablation=ablation)
         self.aggregator = Aggregator(sent_dim, hidden_size, ablation=ablation)
 
@@ -696,8 +666,9 @@ class LMGraphRelationNet(nn.Module):
         super().__init__()
         self.ablation = ablation
         self.use_contextualized = use_contextualized
-        self.encoder = TextEncoder(model_name, **encoder_config)
-        self.decoder = GraphRelationNet(k, n_type, n_basis, n_layer, self.encoder.sent_dim, diag_decompose,
+        self.encoder = SAND(**encoder_config)
+        #self.decoder = MLP(256, fc_dim, 2, n_fc_layer, p_fc, layer_norm=True)
+        self.decoder = GraphRelationNet(k, n_type, n_basis, n_layer, 256, diag_decompose,
                                         n_concept, n_relation, concept_dim, concept_in_dim, n_attention_head,
                                         fc_dim, n_fc_layer, att_dim, att_layer_num, p_emb, p_gnn, p_fc,
                                         pretrained_concept_emb=pretrained_concept_emb, freeze_ent_emb=freeze_ent_emb,
@@ -731,12 +702,13 @@ class LMGraphRelationNet(nn.Module):
         else:
             *lm_inputs, concept_ids, node_type_ids, adj_lengths, emb_data, adj = inputs
         if 'no_lm' not in self.ablation:
-            sent_vecs, all_hidden_states = self.encoder(*lm_inputs, layer_id=layer_id)
+            sent_vecs = self.encoder(*lm_inputs)
         else:
             sent_vecs = torch.ones((bs * nc, self.encoder.sent_dim), dtype=torch.float)
         logits, attn = self.decoder(sent_vecs.to(concept_ids.device), concept_ids, node_type_ids, adj_lengths, adj,
                                     emb_data=emb_data, cache_output=cache_output)
         #logits = logits.view(bs, nc)
+        #logits = self.decoder(sent_vecs)
         logits = logits.view(bs, 2)
         return logits, attn
 
@@ -758,11 +730,13 @@ class LMGraphRelationNetDataLoader(object):
         self.use_contextualized = use_contextualized
 
         model_type = MODEL_NAME_TO_CLASS[model_name]
-        self.train_qids, self.train_labels, *self.train_encoder_data = load_input_tensors(train_statement_path, model_type, model_name, max_seq_length, max_num_pervisit, format=format)
-        self.dev_qids, self.dev_labels, *self.dev_encoder_data = load_input_tensors(dev_statement_path, model_type, model_name, max_seq_length, max_num_pervisit, format=format)
+        self.train_qids, self.train_labels, *self.train_encoder_data = load_sand_input(train_statement_path, max_seq_length, max_num_pervisit)
+        self.dev_qids, self.dev_labels, *self.dev_encoder_data = load_sand_input(dev_statement_path, max_seq_length, max_num_pervisit)
 
         num_choice = self.train_encoder_data[0].size(1)
-        #print("encoder data size: ", self.train_encoder_data[1])
+        # print("encoder data size: ", self.train_encoder_data[0].shape, self.train_encoder_data[1].shape)
+        # print(self.train_encoder_data[1])
+        # print('labels: ', str(self.train_labels.data.numpy().tolist()).count("0"))
         *self.train_decoder_data, self.train_adj_data, n_rel = load_adj_data(train_adj_path, max_node_num, num_choice, emb_pk_path=train_embs_path if use_contextualized else None)
         *self.dev_decoder_data, self.dev_adj_data, n_rel = load_adj_data(dev_adj_path, max_node_num, num_choice, emb_pk_path=dev_embs_path if use_contextualized else None)
         assert all(len(self.train_qids) == len(self.train_adj_data) == x.size(0) for x in [self.train_labels] + self.train_encoder_data + self.train_decoder_data)
@@ -773,7 +747,7 @@ class LMGraphRelationNetDataLoader(object):
         self.eval_adj_empty = torch.zeros((self.eval_batch_size, num_choice, n_rel - 1, max_node_num, max_node_num), dtype=torch.float32)
 
         if test_statement_path is not None:
-            self.test_qids, self.test_labels, *self.test_encoder_data = load_input_tensors(test_statement_path, model_type, model_name, max_seq_length, max_num_pervisit, format=format)
+            self.test_qids, self.test_labels, *self.test_encoder_data = load_sand_input(test_statement_path, max_seq_length, max_num_pervisit)
             *self.test_decoder_data, self.test_adj_data, n_rel = load_adj_data(test_adj_path, max_node_num, num_choice, emb_pk_path=test_embs_path if use_contextualized else None)
             assert all(len(self.test_qids) == len(self.test_adj_data) == x.size(0) for x in [self.test_labels] + self.test_encoder_data + self.test_decoder_data)
 
@@ -884,10 +858,3 @@ def run_test():
                     print(Zs)
                     raise
     print('***** all tests are passed *****')
-
-
-def reltest():
-    relattn = RelationAttention(2, 66, 50, 30)
-    S = torch.ones(64, 50)
-    uniatt = relattn(S)
-    print(uniatt[3][1, :].shape)

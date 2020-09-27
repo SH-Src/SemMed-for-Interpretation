@@ -77,7 +77,7 @@ def main():
 
     # model architecture
     parser.add_argument('-k', '--k', default=2, type=int, help='perform k-hop message passing at each layer')
-    parser.add_argument('--ablation', default=[], choices=['no_trans', 'early_relu', 'no_att', 'ctx_trans', 'q2a_only',
+    parser.add_argument('--ablation', default=['q2a_only'], choices=['no_trans', 'early_relu', 'no_att', 'ctx_trans', 'q2a_only',
                                                            'no_typed_transform', 'no_type_att', 'typed_pool', 'no_unary',
                                                            'detach_s_agg', 'detach_s_all', 'detach_s_pool', 'agg_self_loop',
                                                            'early_trans', 'pool_qc', 'pool_ac', 'pool_all',
@@ -92,7 +92,7 @@ def main():
     parser.add_argument('--gnn_layer_num', default=1, type=int, help='number of GNN layers')
     parser.add_argument('--fc_dim', default=200, type=int, help='number of FC hidden units')
     parser.add_argument('--fc_layer_num', default=0, type=int, help='number of FC layers')
-    parser.add_argument('--freeze_ent_emb', default=True, type=bool_flag, nargs='?', const=True, help='freeze entity embedding layer')
+    parser.add_argument('--freeze_ent_emb', default=False, type=bool_flag, nargs='?', const=False, help='freeze entity embedding layer')
     parser.add_argument('--eps', type=float, default=1e-15, help='avoid numeric overflow')
     parser.add_argument('--init_range', default=0.02, type=float, help='stddev when initializing with normal distribution')
     parser.add_argument('--init_rn', default=True, type=bool_flag, nargs='?', const=True)
@@ -109,8 +109,8 @@ def main():
 
     # optimization
     parser.add_argument('-dlr', '--decoder_lr', default=DECODER_DEFAULT_LR[args.dataset], type=float, help='learning rate')
-    parser.add_argument('-mbs', '--mini_batch_size', default=1, type=int)
-    parser.add_argument('-ebs', '--eval_batch_size', default=4, type=int)
+    parser.add_argument('-mbs', '--mini_batch_size', default=32, type=int)
+    parser.add_argument('-ebs', '--eval_batch_size', default=32, type=int)
     parser.add_argument('--unfreeze_epoch', default=3, type=int)
     parser.add_argument('--refreeze_epoch', default=10000, type=int)
 
