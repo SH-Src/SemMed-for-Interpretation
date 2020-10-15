@@ -413,15 +413,64 @@ def decode(args):
     dataset = LMGraphRelationNetDataLoader(old_args.train_statements, old_args.train_adj,
                                            old_args.dev_statements, old_args.dev_adj,
                                            old_args.test_statements, old_args.test_adj,
-                                           batch_size=args.batch_size, eval_batch_size=args.eval_batch_size, device=(device, device),
+                                           batch_size=args.batch_size, eval_batch_size=args.eval_batch_size,
+                                           device=(device, device),
                                            model_name=old_args.encoder,
                                            max_node_num=old_args.max_node_num, max_seq_length=old_args.max_seq_len,
-                                           is_inhouse=old_args.inhouse, inhouse_train_qids_path=old_args.inhouse_train_qids, use_contextualized=use_contextualized,
-                                           train_embs_path=old_args.train_embs, dev_embs_path=old_args.dev_embs, test_embs_path=old_args.test_embs,
+                                           is_inhouse=old_args.inhouse,
+                                           inhouse_train_qids_path=old_args.inhouse_train_qids,
+                                           use_contextualized=use_contextualized,
+                                           train_embs_path=old_args.train_embs, dev_embs_path=old_args.dev_embs,
+                                           test_embs_path=old_args.test_embs,
                                            subsample=old_args.subsample, format=old_args.format)
 
     with open(args.cpnet_vocab_path, 'r', encoding='utf-8') as fin:
         id2concept = [w.strip() for w in fin]
+    with open('./data/semmed/cui_vocab_text.txt','r') as fin2:
+        cuis = [line.strip().split(',') for line in fin2]
+    cui2id = {cui[0]: i for i, cui in enumerate(cuis)}
+    cui2txt = {cui[0]: cui[1] for cui in cuis}
+    with open('./data/semmed/graph_all.txt', "r", encoding="utf-8") as fin3:
+        triple_set = [lin.strip().split(',') for lin in fin3]
+
+    def ids_to_sentences(path_ids):
+        if len(path_ids) == 1:
+            return None, None
+        triples = np.zeros(((len(path_ids)-1)//2, 3), dtype=np.int32)
+        sent_ids = []
+        texts = []
+        sentences = []
+        for p in range(len(path_ids)):
+            if p == 0:
+                triples[0][0] = path_ids[p].item()
+            elif p == len(path_ids) - 1:
+                triples[-1][2] = path_ids[-1].item()
+            elif p % 2 == 0:
+                triples[(p//2) - 1][2] = path_ids[p].item()
+                triples[p//2][0] = path_ids[p].item()
+            else:
+                rid = path_ids[p].item()
+                triples[(p-1)//2][1] = rid
+        triples = list(triples)
+
+        for triple in triples:
+            if triple[1] < len(relations_prune):
+                rel = relations_prune[triple[1]]
+            else:
+                rel = relations_prune[triple[1] - len(relations_prune)]
+            for ls in triple_set:
+                if relations_prune[int(ls[2])] == rel:
+                    if int(ls[0]) == cui2id[id2concept[triple[0]]] and int(ls[1]) == cui2id[id2concept[triple[2]]]:
+                        texts.append([cui2txt[id2concept[triple[0]]], rel,
+                                      cui2txt[id2concept[triple[2]]]])
+                        sent_ids.append(ls[3])
+                        break
+                    elif int(ls[1]) == cui2id[id2concept[triple[0]]] and int(ls[0]) == cui2id[id2concept[triple[2]]]:
+                        sent_ids.append(ls[3])
+                        texts.append([cui2txt[id2concept[triple[0]]], rel,
+                                      cui2txt[id2concept[triple[2]]]])
+                        break
+        return sent_ids, texts
 
     def path_ids_to_text(path_ids):
         assert len(path_ids) % 2 == 1
@@ -439,70 +488,87 @@ def decode(args):
 
     print()
     print("***** decoding *****")
-    print(f'| dataset: {old_args.dataset} | num_dev: {dataset.dev_size()} | num_test: {dataset.test_size()} | save_dir: {args.save_dir} |')
+    print(
+        f'| dataset: {old_args.dataset} | num_dev: {dataset.dev_size()} | num_test: {dataset.test_size()} | save_dir: {args.save_dir} |')
     model.eval()
 
-    #for eval_set, filename in zip([dataset.dev(), dataset.test()], ['decode_dev.txt', 'decode_test.txt']):
-    outputs = []
-    with torch.no_grad():
-        for qids, labels, *input_data in tqdm(dataset.dev()):
-            logits, path_ids, path_lengths = model.decode(*input_data)
-            predictions = logits.argmax(1)
-            for i, (qid, label, pred) in enumerate(zip(qids, labels, predictions)):
-                outputs.append('*' * 60)
-                outputs.append('id: {}'.format(qid))
-                outputs.append('record_icd: {}'.format(statement_dic_dev[qid]['record_icd']))
-                outputs.append('record_cui: {}'.format(statement_dic_dev[qid]['record_cui']))
-                # print("qid: ", qid)
-                # print(str(statement_dic_dev[qid]['label']).strip())
-                # print(str(label.item()).strip())
-                assert str(statement_dic_dev[qid]['label']).strip() == str(label.item()).strip()
-                outputs.append('label: {}'.format(statement_dic_dev[qid]['label']))
-                outputs.append('prediction: {}'.format([pred.item()]))
-                # for j, answer in enumerate(statement_dic[qid]['labels']):
-                #     path = path_ids[i, j, :path_lengths[i, j]]
-                #     outputs.append('{:25} {}'.format('[{}. {}]{}{}'.format(chr(ord('A') + j),
-                #                                                            answer,
-                #                                                            '*' if j == label else '',
-                #                                                            '^' if j == pred else ''),
-                #                                      path_ids_to_text(path)))
-                path = path_ids[i, 0, :path_lengths[i, 0]]
-                outputs.append('path: {}'.format(path_ids_to_text(path)))
+    # for eval_set, filename in zip([dataset.dev(), dataset.test()], ['decode_dev.txt', 'decode_test.txt']):
+
     output_path = os.path.join(args.save_dir, 'decode_dev.txt')
     with open(output_path, 'w') as fout:
-        for line in outputs:
-            fout.write(line + '\n')
+        outputs = []
+        with torch.no_grad():
+            for qids, labels, *input_data in tqdm(dataset.dev()):
+                logits, path_ids, path_lengths, atts = model.decode(*input_data)
+                predictions = logits.argmax(1)
+                for i, (qid, label, pred) in enumerate(zip(qids, labels, predictions)):
+                    outputs.append('*' * 60)
+                    outputs.append('id: {}'.format(qid))
+                    outputs.append('record_icd: {}'.format(statement_dic_dev[qid]['record_icd']))
+                    outputs.append('record_cui: {}'.format(statement_dic_dev[qid]['record_cui']))
+                    record_cui = statement_dic_dev[qid]['record_cui']
+                    for a in range(0, len(record_cui)):
+                        for b in range(len(record_cui[a])):
+                            record_cui[a][b] = cui2txt[record_cui[a][b]]
+                    outputs.append('record_cui_text: {}'.format(record_cui))
+                    # print("qid: ", qid)
+                    # print(str(statement_dic_dev[qid]['label']).strip())
+                    # print(str(label.item()).strip())
+                    assert str(statement_dic_dev[qid]['label']).strip() == str(label.item()).strip()
+                    outputs.append('label: {}'.format(statement_dic_dev[qid]['label']))
+                    outputs.append('prediction: {}'.format([pred.item()]))
+                    # for j, answer in enumerate(statement_dic[qid]['labels']):
+                    #     path = path_ids[i, j, :path_lengths[i, j]]
+                    #     outputs.append('{:25} {}'.format('[{}. {}]{}{}'.format(chr(ord('A') + j),
+                    #                                                            answer,
+                    #                                                            '*' if j == label else '',
+                    #                                                            '^' if j == pred else ''),
+                    #                                      path_ids_to_text(path)))
+                    for j in range(0, 3):
+                        path = path_ids[i, j, :path_lengths[i, j]]
+                        outputs.append('path: {}, weights: {}'.format(path_ids_to_text(path), atts[i, j].item()))
+                        sentids, sents = ids_to_sentences(path)
+                        outputs.append('sentences_ids: {}'.format(sentids))
+                        outputs.append('sentences: {}'.format(sents))
+                    for line in outputs:
+                        fout.write(line + '\n')
+                    outputs = []
     print(f'outputs saved to {output_path}')
 
-    outputs = []
-    with torch.no_grad():
-        for qids, labels, *input_data in tqdm(dataset.test()):
-            logits, path_ids, path_lengths = model.decode(*input_data)
-            predictions = logits.argmax(1)
-            for i, (qid, label, pred) in enumerate(zip(qids, labels, predictions)):
-                outputs.append('*' * 60)
-                outputs.append('id: {}'.format(qid))
-                outputs.append('record_icd: {}'.format(statement_dic_test[qid]['record_icd']))
-                outputs.append('record_cui: {}'.format(statement_dic_test[qid]['record_cui']))
-                # print("qid: ", qid)
-                # print(str(statement_dic_test[qid]['label']).strip())
-                # print(str(label.item()).strip())
-                assert str(statement_dic_test[qid]['label']).strip() == str(label.item()).strip()
-                outputs.append('label: {}'.format(statement_dic_test[qid]['label']))
-                outputs.append('prediction: {}'.format([pred.item()]))
-                # for j, answer in enumerate(statement_dic[qid]['labels']):
-                #     path = path_ids[i, j, :path_lengths[i, j]]
-                #     outputs.append('{:25} {}'.format('[{}. {}]{}{}'.format(chr(ord('A') + j),
-                #                                                            answer,
-                #                                                            '*' if j == label else '',
-                #                                                            '^' if j == pred else ''),
-                #                                      path_ids_to_text(path)))
-                path = path_ids[i, 0, :path_lengths[i, 0]]
-                outputs.append('path: {}'.format(path_ids_to_text(path)))
     output_path = os.path.join(args.save_dir, 'decode_test.txt')
     with open(output_path, 'w') as fout:
-        for line in outputs:
-            fout.write(line + '\n')
+        outputs = []
+        with torch.no_grad():
+            for qids, labels, *input_data in tqdm(dataset.test()):
+                logits, path_ids, path_lengths, atts = model.decode(*input_data)
+                predictions = logits.argmax(1)
+                for i, (qid, label, pred) in enumerate(zip(qids, labels, predictions)):
+                    outputs.append('*' * 60)
+                    outputs.append('id: {}'.format(qid))
+                    outputs.append('record_icd: {}'.format(statement_dic_test[qid]['record_icd']))
+                    outputs.append('record_cui: {}'.format(statement_dic_test[qid]['record_cui']))
+                    # print("qid: ", qid)
+                    # print(str(statement_dic_test[qid]['label']).strip())
+                    # print(str(label.item()).strip())
+                    assert str(statement_dic_test[qid]['label']).strip() == str(label.item()).strip()
+                    outputs.append('label: {}'.format(statement_dic_test[qid]['label']))
+                    outputs.append('prediction: {}'.format([pred.item()]))
+                    # for j, answer in enumerate(statement_dic[qid]['labels']):
+                    #     path = path_ids[i, j, :path_lengths[i, j]]
+                    #     outputs.append('{:25} {}'.format('[{}. {}]{}{}'.format(chr(ord('A') + j),
+                    #                                                            answer,
+                    #                                                            '*' if j == label else '',
+                    #                                                            '^' if j == pred else ''),
+                    #                                      path_ids_to_text(path)))
+                    for j in range(0, 3):
+                        path = path_ids[i, j, :path_lengths[i, j]]
+                        outputs.append('path: {}, weights: {}'.format(path_ids_to_text(path), atts[i, j].item()))
+                        sentids, sents = ids_to_sentences(path)
+                        outputs.append('sentences_ids: {}'.format(sentids))
+                        outputs.append('sentences: {}'.format(sents))
+                    for line in outputs:
+                        fout.write(line + '\n')
+                    outputs = []
     print(f'outputs saved to {output_path}')
     print("***** done *****")
     print()

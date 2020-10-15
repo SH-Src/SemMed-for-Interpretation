@@ -186,8 +186,9 @@ class MultiHopMessagePassingLayer(nn.Module):
         bs, n_head, n_node, n_node = A.size()
         assert ((A == 0) | (A == 1)).all()
 
-        path_ids = end_ids.new_zeros((bs, self.k * 2 + 1))
-        path_lengths = end_ids.new_zeros((bs,))
+        path_ids = end_ids.new_zeros((bs, 3, self.k * 2 + 1))
+        path_lengths = end_ids.new_zeros((bs, 3, ))
+        atts = end_ids.new_zeros((bs, 3, )).float()
 
         for idx in range(bs):
             back_trace = []
@@ -218,32 +219,39 @@ class MultiHopMessagePassingLayer(nn.Module):
             dp, ptr = dp.max(0)
             back_trace.append(ptr)  # (n_node,)
             dp = dp * start_a
-            dp, ptr = dp.max(0)
-            back_trace.append(ptr)  # （)
-            assert dp.dim() == 0
+            #dp, ptr = dp.topk(3, dim=0, largest=False, sorted=True)
+            dp = dp[-3:]
+            ptr = [n_node - 3, n_node - 2, n_node - 1]
+            if (dp == 0).all():
+                print("all zero")
+            back_trace.append(ptr)  # （3,)
+            assert dp.dim() == 1
             assert len(back_trace) == k + (k - 1) + 2
+            atts[idx] = dp
+            #print(dp)
+            #print(atts[idx])
 
-            # re-construct path from back_trace
-            path = end_id.new_zeros((2 * k + 1,))  # (k + 1) entities and k relations
-            path[0] = back_trace.pop(-1)
-            path[1] = back_trace.pop(-1)[path[0]]
-            for p in range(2, 2 * k + 1):
-                if p % 2 == 0:  # need to fill a entity id
-                    path[p] = back_trace.pop(-1)[path[p - 1], path[p - 2]]
-                else:  # need to fill a relation id
-                    path[p] = back_trace.pop(-1)[path[p - 2], path[p - 1]]
-            assert len(back_trace) == 0
-            if path[-1] != end_id:
-                print('path: ', path)
-                print('end_id', end_id)
-                path_ids[idx, 0] = end_id
-                path_lengths[idx] = 1
-                continue
-            #assert path[-1] == end_id
-            path_ids[idx, :2 * k + 1] = path
-            path_lengths[idx] = 2 * k + 1
+            for i in range(0, 3):
+                # re-construct path from back_trace
+                path = end_id.new_zeros((2 * k + 1,))  # (k + 1) entities and k relations
+                path[0] = back_trace[-1][i]
+                path[1] = back_trace[-2][path[0]]
+                for p in range(2, 2 * k + 1):
+                    if p % 2 == 0:  # need to fill a entity id
+                        path[p] = back_trace[-p-1][path[p - 1], path[p - 2]]
+                    else:  # need to fill a relation id
+                        path[p] = back_trace[-p-1][path[p - 2], path[p - 1]]
+                # assert len(back_trace) == 0
+                if path[-1] != end_id:
+                    # print('topk: {}, path: {}, end_id: {}'.format(i, path, end_id))
+                    path_ids[idx, i, 0] = end_id
+                    path_lengths[idx, i] = 1
+                    continue
+                # assert path[-1] == end_id
+                path_ids[idx, i, :2 * k + 1] = path
+                path_lengths[idx, i] = 2 * k + 1
 
-        return path_ids, path_lengths
+        return path_ids, path_lengths, atts
 
     def forward(self, X, A, start_attn, end_attn, uni_attn, trans_attn):
         """
@@ -460,8 +468,8 @@ class GraphRelationLayer(nn.Module):
         if 'detach_s_agg' not in self.ablation:
             ks = ks + 1
         ks = ks.gather(1, end_ids.unsqueeze(-1)).squeeze(-1)  # (bs,)
-        path_ids, path_lenghts = self.message_passing.decode(end_ids, ks, A, self.start_attn, self.uni_attn, self.trans_attn)
-        return path_ids, path_lenghts
+        path_ids, path_lenghts, atts = self.message_passing.decode(end_ids, ks, A, self.start_attn, self.uni_attn, self.trans_attn)
+        return path_ids, path_lenghts, atts
 
     def forward(self, S, H, A, node_type, cache_output=False):
         """
@@ -510,23 +518,8 @@ class GraphRelationEncoder(nn.Module):
                                                         ablation=ablation) for _ in range(n_layer)])
 
     def decode(self, end_ids, A):
-        bs = end_ids.size(0)
-        k = self.layers[0].message_passing.k
-        full_path_ids = end_ids.new_zeros((bs, k * 2 * len(self.layers) + 1))
-        full_path_ids[:, 0] = end_ids
-        full_path_lengths = end_ids.new_ones((bs,))
-        for layer in self.layers[::-1]:
-            path_ids, path_lengths = layer.decode(end_ids, A)
-            for i in range(bs):
-                prev_l = full_path_lengths[i]
-                inc_l = path_lengths[i]
-                path = path_ids[i]
-                assert full_path_ids[i, prev_l - 1] == path[inc_l - 1]
-                full_path_ids[i, prev_l:prev_l + inc_l - 1] = path_ids[i, :inc_l - 1].flip((0,))
-                full_path_lengths[i] = prev_l + inc_l - 1
-        for i in range(bs):
-            full_path_ids[i, :full_path_lengths[i]] = full_path_ids[i, :full_path_lengths[i]].flip((0,))
-        return full_path_ids, full_path_lengths
+        path_ids, path_lengths, atts = self.layers[0].decode(end_ids, A)
+        return path_ids, path_lengths, atts
 
     def forward(self, S, H, A, node_type_ids, cache_output=False):
         """
@@ -630,12 +623,15 @@ class GraphRelationNet(nn.Module):
     def decode(self):
         bs, _, n_node, _ = self.adj.size()
         end_ids = self.pool_attn.view(-1, bs, n_node)[0, :, :].argmax(-1)  # use only the first head if multi-head attention
-        path_ids, path_lengths = self.gnn.decode(end_ids, self.adj)
+        path_ids, path_lengths, atts = self.gnn.decode(end_ids, self.adj)
 
         # translate local entity ids (0~200) into global eneity ids (0~7e5)
-        entity_ids = path_ids[:, ::2]  # (bs, ?)
-        path_ids[:, ::2] = self.concept_ids.gather(1, entity_ids)
-        return path_ids, path_lengths
+        for i in range(0, 3):
+            path_ids_tmp = path_ids[:, i, :]
+            entity_ids = path_ids_tmp[:, ::2]  # (bs, ?)
+            path_ids_tmp[:, ::2] = self.concept_ids.gather(1, entity_ids)
+            path_ids[:, i, :] = path_ids_tmp
+        return path_ids, path_lengths, atts
 
     def forward(self, sent_vecs, concept_ids, node_type_ids, adj_lengths, adj, emb_data=None, cache_output=False):
         """
@@ -687,6 +683,7 @@ class GraphRelationNet(nn.Module):
         return logits, pool_attn
 
 
+
 class LMGraphRelationNet(nn.Module):
     def __init__(self, model_name, k, n_type, n_basis, n_layer, diag_decompose,
                  n_concept, n_relation, concept_dim, concept_in_dim, n_attention_head,
@@ -709,11 +706,11 @@ class LMGraphRelationNet(nn.Module):
     def decode(self, *inputs, layer_id=-1):
         bs, nc = inputs[0].size(0), inputs[0].size(1)
         logits, _ = self.forward(*inputs, layer_id=layer_id, cache_output=True)
-        path_ids, path_lengths = self.decoder.decode()
+        path_ids, path_lengths, atts = self.decoder.decode()
         assert (path_lengths % 2 == 1).all()
-        path_ids = path_ids.view(bs, nc, -1)
-        path_lengths = path_lengths.view(bs, nc)
-        return logits, path_ids, path_lengths
+        path_ids = path_ids.view(bs, 3, -1)
+        path_lengths = path_lengths.view(bs, 3)
+        return logits, path_ids, path_lengths, atts
 
     def forward(self, *inputs, layer_id=-1, cache_output=False):
         """
