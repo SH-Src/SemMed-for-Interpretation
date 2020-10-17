@@ -23,8 +23,6 @@ Data format:
         "hf_label": 0
     }
 }
-There are two types of data loss: One occurs because limited icd codes of the icd2cui mapping can not
-cover all icd codes appeared in the dataset. Another occurs due to the 1toM icd2snomed mapping
 """
 
 import json
@@ -34,8 +32,6 @@ import sys
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-
-__all__ = ['pickle2jsonl']
 
 
 hf_icd = ['490', '491', '491.0', '491.1', '491.2', '491.20', '491.21', '491.22',
@@ -49,7 +45,6 @@ def load_code2idx(code2idx_path: str) -> dict:
 
 
 def map_icd2cui(snomedct_path: str, icd2snomed_1to1_path: str, icd2snomed_1toM_path: str) -> dict:
-    # TODO: optimizing the selection problem of 1toM mapping
     """
     convert icd-9 codes to umls_cui via snomed_cid
 
@@ -88,7 +83,6 @@ def map_icd2cui(snomedct_path: str, icd2snomed_1to1_path: str, icd2snomed_1toM_p
 
 
 def create_output_dict(row, medical_record, hf_label, icd_list, idx2code, icd2cui, time_dist):
-    # TODO: deal with the record with no cui found, for example id=20
     """
     convert each line of the hf data into a dictionary
 
